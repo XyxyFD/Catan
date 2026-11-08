@@ -1,0 +1,15 @@
+{
+  "name": "archipel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hex-Inselspiel für 2-4 Spieler (Prototyp)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "4.21.2",
+    "pg": "8.13.1",
+    "socket.io": "4.8.1"
+  }
+}
