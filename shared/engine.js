@@ -19,9 +19,11 @@
   const PIECES_LEFT_DE = { road: 'Straßen', ship: 'Schiffe', settlement: 'Siedlungen', city: 'Städte' };
   const DEV_DE = { knight: 'Ritter', vp: 'Siegpunkt', roadBuilding: 'Straßenbau', yearOfPlenty: 'Erfindung', monopoly: 'Monopol' };
   const COLORS = [
-    { id: 'red', hex: '#c62828' }, { id: 'blue', hex: '#1565c0' },
-    { id: 'orange', hex: '#ef6c00' }, { id: 'white', hex: '#f4f4f4' },
+    { id: 'red', de: 'Rot', hex: '#d32f2f' }, { id: 'blue', de: 'Blau', hex: '#1e6fd9' },
+    { id: 'orange', de: 'Orange', hex: '#f57c00' }, { id: 'white', de: 'Weiß', hex: '#f5f5f0' },
+    { id: 'green', de: 'Grün', hex: '#2e9d4f' },
   ];
+  const STATE_VERSION = 4;
   const DEV_DECK = [].concat(
     Array(14).fill('knight'), Array(5).fill('vp'),
     Array(2).fill('roadBuilding'), Array(2).fill('yearOfPlenty'), Array(2).fill('monopoly'));
@@ -33,6 +35,9 @@
   const emptyRes = () => ({ wood: 0, brick: 0, sheep: 0, wheat: 0, ore: 0 });
   const sumRes = r => (r ? RES.reduce((s, k) => s + (r[k] || 0), 0) : 0);
   const hasRes = (have, need) => RES.every(k => (have[k] || 0) >= (need[k] || 0));
+  // Rohstoffe sind unbegrenzt: Bank ist nur Quelle/Senke.
+  function addRes(to, res) { for (const k of RES) to[k] += res[k] || 0; }
+  function removeRes(from, res) { for (const k of RES) from[k] -= res[k] || 0; }
   function transfer(from, to, res) {
     for (const k of RES) { const n = res[k] || 0; if (n) { from[k] -= n; to[k] += n; } }
   }
@@ -61,7 +66,7 @@
   function mark(g, kind, key) { g.markSeq = (g.markSeq || 0) + 1; g.last = { kind, key, id: g.markSeq }; }
 
   // ---------- Geometrie-Helfer ----------
-  const graph = g => B.buildGraph(g.map.radius);
+  const graph = g => B.buildGraph(g.map.size);
   const hexT = (g, k) => (g.map.hexes[k] ? g.map.hexes[k].t : null);
   const bAt = (g, vk) => g.pieces.v[vk];
   const eAt = (g, ek) => g.pieces.e[ek];
@@ -112,7 +117,7 @@
   function legalSetupSettlement(g, vk) {
     const V = graph(g).vertices[vk];
     if (!V || !distanceOk(g, vk) || !vertexTouchesLand(g, vk)) return false;
-    return V.hexes.filter(h => B.isLand(hexT(g, h))).every(h => g.islandOf[h] === g.startIsland);
+    return true; // Start auf jeder Insel erlaubt
   }
   function legalSetupRoute(g, ek, type) {
     const e = graph(g).edges[ek];
@@ -248,7 +253,7 @@
     size = size === 3 ? 3 : 4;
     islands = islands === 3 ? 3 : 2;
     const g = {
-      id, name: gameName || 'Neue Runde', hostId: host.id, status: 'lobby', createdAt: Date.now(),
+      version: STATE_VERSION, id, name: gameName || 'Neue Runde', hostId: host.id, status: 'lobby', createdAt: Date.now(),
       settings: { size, islands, vpTarget: 13 },
       map: B.generateMap(size, islands), players: [], seq: 0, log: [],
     };
@@ -260,7 +265,10 @@
     if (g.players.some(p => p.userId === user.id)) return;
     if (g.status !== 'lobby') fail('Das Spiel läuft bereits.');
     if (g.players.length >= 4) fail('Das Spiel ist voll (max. 4 Spieler).');
-    g.players.push({ userId: user.id, name: user.name });
+    if (!COLORS.length) fail('Keine Farbe frei.');
+    const used = g.players.map(p => p.colorId);
+    const free = COLORS.find(c => !used.includes(c.id));
+    g.players.push({ userId: user.id, name: user.name, colorId: free.id });
     log(g, `👋 ${user.name} ist dem Spiel beigetreten.`);
   }
 
@@ -273,18 +281,18 @@
     if (!isl.sizes.length) fail('Die Karte hat kein Land.');
     g.islandOf = isl.islandOf;
     g.islandCount = isl.sizes.length;
-    g.startIsland = isl.sizes.indexOf(Math.max(...isl.sizes));
     B.shuffle(g.players);
     g.players = g.players.map((p, i) => ({
-      userId: p.userId, name: p.name, color: COLORS[i].hex, colorId: COLORS[i].id,
+      userId: p.userId, name: p.name, colorId: p.colorId, color: COLORS.find(c => c.id === p.colorId).hex,
       res: emptyRes(), dev: [], knights: 0, routeLen: 0, homeIslands: [], bonusIslands: [],
-      left: { road: 15, ship: 15, settlement: 5, city: 4 },
+      left: { road: 30, ship: 30, settlement: 5, city: 4 },
     }));
     g.pieces = { v: {}, e: {} };
-    g.bank = { wood: 19, brick: 19, sheep: 19, wheat: 19, ore: 19 };
     g.devDeck = B.shuffle(DEV_DECK.slice());
     g.diceStats = {};
     for (let i = 2; i <= 12; i++) g.diceStats[i] = 0;
+    g.diceStatsBy = g.players.map(() => { const o = {}; for (let i = 2; i <= 12; i++) o[i] = 0; return o; });
+    g.lastRoll = null;
     g.rollCount = 0;
     g.dice = null;
     const order = g.players.map((_, i) => i);
@@ -292,7 +300,7 @@
     Object.assign(g, {
       current: 0, turn: 0, phase: 'setup', status: 'playing', longestRoad: null, largestArmy: null,
       trade: null, devPlayed: false, shipMoved: false, freeRoads: 0, discards: {}, goldPending: {},
-      stealFrom: [], returnPhase: null, winner: null, last: null,
+      returnPhase: null, winner: null, last: null, robberFrom: null, robberMoved: null, lastSteal: null, lastTrade: null,
     });
     log(g, `🚩 Das Spiel beginnt! Reihenfolge: ${g.players.map(p => p.name).join(' → ')}.`);
     log(g, `Aufbau: ${name(g, 0)} setzt die erste Siedlung (nur auf der Startinsel).`);
@@ -306,6 +314,14 @@
       if (!A || !H || a.a === a.b) fail('Ungültige Felder.');
       return [A, H];
     };
+    if (a.type === 'color') {
+      const c = COLORS.find(x => x.id === a.color);
+      if (!c) fail('Unbekannte Farbe.');
+      if (g.players.some((pl, i) => i !== p && pl.colorId === c.id)) fail('Diese Farbe hat schon jemand.');
+      g.players[p].colorId = c.id;
+      return;
+    }
+    if (userId !== g.hostId) fail('Nur ' + (g.players.find(pl => pl.userId === g.hostId) || { name: 'der Ersteller' }).name + (a.type === 'start' ? ' kann das Spiel starten.' : ' kann die Karte bearbeiten.'));
     switch (a.type) {
       case 'regenerate': {
         const size = Number(a.size) === 3 ? 3 : 4, islands = Number(a.islands) === 3 ? 3 : 2;
@@ -362,7 +378,7 @@
   const PHASE_MSG = {
     setup: 'Das geht erst nach dem Aufbau.', roll: 'Zuerst würfeln.', main: 'Das geht gerade nicht.',
     discard: 'Erst müssen Karten abgeworfen werden.', robber: 'Zuerst Räuber oder Pirat versetzen.',
-    steal: 'Zuerst wählen, wem du eine Karte stiehlst.', gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
+gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
   };
   function needPhase(g, ph) { if (g.phase !== ph) fail(PHASE_MSG[g.phase] || 'Das geht gerade nicht.'); }
 
@@ -378,21 +394,6 @@
       s.lastVertex = a.at; s.expect = 'route';
       mark(g, 'v', a.at);
       log(g, `🏠 ${pl.name} setzt eine Siedlung.`);
-      if (s.step >= g.players.length) { // zweite Runde -> Starterträge
-        const res = emptyRes();
-        let gold = 0;
-        for (const h of G.vertices[a.at].hexes) {
-          const t = hexT(g, h);
-          if (t === 'gold') gold++;
-          else if (B.RESOURCE_OF[t]) res[B.RESOURCE_OF[t]]++;
-        }
-        for (const r of RES) res[r] = Math.min(res[r], g.bank[r]);
-        if (sumRes(res)) { transfer(g.bank, pl.res, res); log(g, `${pl.name} erhält ${fmtRes(res)}.`); }
-        if (gold) {
-          g.goldPending = { [p]: gold }; g.returnPhase = 'setup'; g.phase = 'gold';
-          log(g, `💰 ${pl.name} darf ${gold} Rohstoff(e) aus dem Goldfluss wählen.`);
-        }
-      }
     } else if (a.kind === 'road' || a.kind === 'ship') {
       if (s.expect !== 'route') fail('Zuerst eine Siedlung setzen.');
       if (!legalSetupRoute(g, a.at, a.kind)) fail(`Hier kannst du kein${a.kind === 'road' ? 'e Straße' : ' Schiff'} bauen.`);
@@ -400,15 +401,45 @@
       pl.left[a.kind]--;
       mark(g, 'e', a.at);
       log(g, `${a.kind === 'road' ? '🛤️' : '⛵'} ${pl.name} baut ${a.kind === 'road' ? 'eine Straße' : 'ein Schiff'}.`);
-      s.step++;
-      if (s.step >= s.order.length) {
-        g.phase = 'roll'; g.current = 0; g.turn = 1; g.setup = null;
-        log(g, `✅ Aufbau abgeschlossen. ${name(g, 0)} beginnt und würfelt.`);
-      } else {
-        g.current = s.order[s.step]; s.expect = 'settlement'; s.lastVertex = null;
-      }
+      s.expect = 'done';
       updateLongestRoad(g);
     } else fail('Im Aufbau werden nur Siedlungen, Straßen und Schiffe gesetzt.');
+  }
+
+  function setupEndTurn(g, p) {
+    const s = g.setup;
+    if (s.expect !== 'done') fail(s.expect === 'settlement' ? 'Setze zuerst eine Siedlung.' : 'Baue zuerst eine Straße oder ein Schiff.');
+    s.step++;
+    if (s.step >= s.order.length) {
+      g.phase = 'roll'; g.current = 0; g.turn = 1; g.setup = null;
+      log(g, `✅ Aufbau abgeschlossen – Startrohstoffe werden verteilt.`);
+      distributeStart(g);
+      log(g, `${name(g, 0)} beginnt und würfelt.`);
+    } else {
+      g.current = s.order[s.step]; s.expect = 'settlement'; s.lastVertex = null;
+      log(g, `➡️ ${name(g, g.current)} ist im Aufbau dran.`);
+    }
+  }
+
+  // Erst wenn alle mit dem Aufbau fertig sind: jede Startsiedlung bringt je einen Rohstoff pro
+  // angrenzendem Feld; Goldfluss-Felder erlauben eine freie Wahl (danach wird gewürfelt).
+  function distributeStart(g) {
+    const G = graph(g), gains = g.players.map(() => emptyRes()), gold = {};
+    for (const vk in g.pieces.v) {
+      const b = g.pieces.v[vk];
+      for (const h of G.vertices[vk].hexes) {
+        const t = hexT(g, h);
+        if (t === 'gold') gold[b.owner] = (gold[b.owner] || 0) + 1;
+        else if (B.RESOURCE_OF[t]) gains[b.owner][B.RESOURCE_OF[t]]++;
+      }
+    }
+    gains.forEach((res, i) => { if (sumRes(res)) { addRes(g.players[i].res, res); log(g, `${name(g, i)} erhält ${fmtRes(res)}.`); } });
+    g.goldPending = {};
+    for (const o in gold) {
+      g.goldPending[o] = gold[o];
+      log(g, `💰 ${name(g, +o)} darf ${gold[o]} Rohstoff(e) aus dem Goldfluss wählen.`);
+    }
+    if (Object.keys(gold).length) { g.phase = 'gold'; g.returnPhase = 'roll'; }
   }
 
   function produce(g, sum) {
@@ -426,17 +457,10 @@
       }
     }
     const got = g.players.map(() => emptyRes());
-    for (const r of RES) {
-      const owners = Object.keys(claims[r]);
-      if (!owners.length) continue;
-      const total = owners.reduce((s, o) => s + claims[r][o], 0);
-      if (total <= g.bank[r]) owners.forEach(o => { got[o][r] += claims[r][o]; });
-      else if (owners.length === 1) { got[owners[0]][r] += g.bank[r]; log(g, `Die Bank hat nicht mehr genug ${RES_DE[r]}.`); }
-      else log(g, `Die Bank hat nicht genug ${RES_DE[r]} – niemand erhält ${RES_DE[r]}.`);
-    }
+    for (const r of RES) for (const o in claims[r]) got[o][r] += claims[r][o];
     let any = false;
     got.forEach((res, i) => {
-      if (sumRes(res)) { any = true; transfer(g.bank, g.players[i].res, res); log(g, `${name(g, i)} erhält ${fmtRes(res)}.`); }
+      if (sumRes(res)) { any = true; addRes(g.players[i].res, res); log(g, `${name(g, i)} erhält ${fmtRes(res)}.`); }
     });
     g.goldPending = {};
     for (const o in gold) {
@@ -445,6 +469,7 @@
       log(g, `💰 ${name(g, +o)} darf ${gold[o]} Rohstoff(e) aus dem Goldfluss wählen.`);
     }
     if (!any) log(g, 'Niemand erhält Rohstoffe.');
+    return { got, gold };
   }
 
   function doRoll(g, p) {
@@ -453,6 +478,8 @@
     g.dice = [d1, d2];
     g.rollCount = (g.rollCount || 0) + 1;
     g.diceStats[sum]++;
+    g.diceStatsBy[p][sum]++;
+    g.lastRoll = { id: g.rollCount, by: p, dice: [d1, d2], sum, gains: g.players.map(() => emptyRes()), gold: {} };
     log(g, `🎲 ${name(g, p)} würfelt ${d1} + ${d2} = ${sum}.`);
     if (sum === 7) {
       g.returnPhase = 'main';
@@ -462,9 +489,11 @@
       if (Object.keys(d).length) {
         g.phase = 'discard';
         log(g, `Karten abwerfen: ${Object.keys(d).map(i => `${name(g, +i)} (${d[i]})`).join(', ')}.`);
-      } else g.phase = 'robber';
+      } else enterRobber(g, 'main');
     } else {
-      produce(g, sum);
+      const out = produce(g, sum);
+      g.lastRoll.gains = out.got;
+      g.lastRoll.gold = out.gold;
       if (Object.keys(g.goldPending).length) { g.phase = 'gold'; g.returnPhase = 'main'; } else g.phase = 'main';
     }
   }
@@ -476,53 +505,72 @@
     const r = cleanRes(a.res);
     if (sumRes(r) !== need) fail(`Du musst genau ${need} Karten abwerfen.`);
     if (!hasRes(g.players[p].res, r)) fail('So viele Karten hast du nicht.');
-    transfer(g.players[p].res, g.bank, r);
+    removeRes(g.players[p].res, r);
     delete g.discards[p];
     log(g, `${name(g, p)} wirft ${need} Karten ab.`);
-    if (!Object.keys(g.discards).length) g.phase = 'robber';
+    if (!Object.keys(g.discards).length) enterRobber(g, 'main');
   }
 
   function doGold(g, p, a) {
     needPhase(g, 'gold');
     const n = g.goldPending[p];
     if (!n) fail('Du hast keine Gold-Auswahl offen.');
-    const need = Math.min(n, sumRes(g.bank));
     const r = cleanRes(a.res);
-    if (sumRes(r) !== need) fail(`Wähle genau ${need} Rohstoff(e).`);
-    if (!hasRes(g.bank, r)) fail('Die Bank hat nicht genug davon.');
-    transfer(g.bank, g.players[p].res, r);
+    if (sumRes(r) !== n) fail(`Wähle genau ${n} Rohstoff(e).`);
+    addRes(g.players[p].res, r);
     delete g.goldPending[p];
     log(g, `💰 ${name(g, p)} wählt ${fmtRes(r)} aus dem Goldfluss.`);
     if (!Object.keys(g.goldPending).length) g.phase = g.returnPhase || 'main';
   }
 
-  function stealFrom(g, p, t) {
-    const pool = [];
-    for (const r of RES) for (let i = 0; i < g.players[t].res[r]; i++) pool.push(r);
-    if (!pool.length) return;
-    const r = B.pick(pool);
-    g.players[t].res[r]--; g.players[p].res[r]++;
-    log(g, `🫳 ${name(g, p)} stiehlt ${name(g, t)} eine Karte.`);
+  // Räuber-Phase: Räuber (Land) ODER Pirat (Meer) beliebig oft versetzen, bis gezogen wurde.
+  function enterRobber(g, returnPhase) {
+    g.phase = 'robber';
+    g.returnPhase = returnPhase;
+    g.robberFrom = { robber: g.map.robber, pirate: g.map.pirate };
+    g.robberMoved = null;
+  }
+
+  function stealCandidates(g, p) {
+    const G = graph(g), cands = new Set();
+    if (g.robberMoved === 'robber' && g.map.robber) {
+      for (const v of G.hexVerts[g.map.robber]) { const b = bAt(g, v); if (b && b.owner !== p) cands.add(b.owner); }
+    } else if (g.robberMoved === 'pirate' && g.map.pirate) {
+      for (const e of G.hexEdges[g.map.pirate]) { const s = eAt(g, e); if (s && s.type === 'ship' && s.owner !== p) cands.add(s.owner); }
+    }
+    return [...cands].sort();
   }
 
   function moveRobber(g, p, a) {
     const k = a.hex, h = g.map.hexes[k];
     if (!h) fail('Ungültiges Feld.');
-    if (k === g.map.robber || k === g.map.pirate) fail('Wähle ein anderes Feld.');
-    const G = graph(g), cands = new Set();
-    if (B.isLand(h.t)) {
-      g.map.robber = k;
-      for (const v of G.hexVerts[k]) { const b = bAt(g, v); if (b && b.owner !== p) cands.add(b.owner); }
-      log(g, `🥷 ${name(g, p)} versetzt den Räuber.`);
-    } else {
-      g.map.pirate = k;
-      for (const e of G.hexEdges[k]) { const s = eAt(g, e); if (s && s.type === 'ship' && s.owner !== p) cands.add(s.owner); }
-      log(g, `🏴‍☠️ ${name(g, p)} versetzt den Piraten.`);
-    }
+    const piece = B.isLand(h.t) ? 'robber' : 'pirate';
+    if (a.piece && a.piece !== piece) fail(a.piece === 'pirate' ? 'Der Pirat darf nur aufs Wasser.' : 'Der Räuber darf nur auf Landfelder.');
+    g.map.robber = g.robberFrom.robber;
+    g.map.pirate = g.robberFrom.pirate;
+    if (k === g.robberFrom[piece]) { g.robberMoved = null; return; } // zurück aufs Ausgangsfeld
+    g.map[piece] = k;
+    g.robberMoved = piece;
     mark(g, 'h', k);
-    const list = [...cands].filter(i => sumRes(g.players[i].res) > 0);
-    if (list.length > 1) { g.stealFrom = list; g.phase = 'steal'; return; }
-    if (list.length === 1) stealFrom(g, p, list[0]);
+  }
+
+  function doSteal(g, p, a) {
+    if (!g.robberMoved) fail('Versetze zuerst den Räuber oder den Piraten auf ein neues Feld.');
+    const cands = stealCandidates(g, p);
+    let t = null, got = null;
+    if (cands.length) {
+      t = Number(a.target);
+      if (!cands.includes(t)) fail('Bei diesem Spieler kannst du nicht ziehen.');
+      const pool = [];
+      for (const r of RES) for (let i = 0; i < g.players[t].res[r]; i++) pool.push(r);
+      if (pool.length) { got = B.pick(pool); g.players[t].res[got]--; g.players[p].res[got]++; }
+    }
+    const who = g.robberMoved === 'robber' ? '🥷 Räuber' : '🏴‍☠️ Pirat';
+    log(g, t === null ? `${who}: ${name(g, p)} hat ihn versetzt – niemand zum Ziehen da.`
+      : `${who}: ${name(g, p)} zieht bei ${name(g, t)} ${got ? 'eine Karte' : '– aber dort ist keine Karte'}.`);
+    g.stealSeq = (g.stealSeq || 0) + 1;
+    g.lastSteal = { id: g.stealSeq, thief: p, victim: t, res: got, piece: g.robberMoved };
+    g.robberMoved = null; g.robberFrom = null;
     g.phase = g.returnPhase || 'main';
   }
 
@@ -535,7 +583,7 @@
     const ok = kind === 'road' ? legalRoad(g, p, a.at) : kind === 'ship' ? legalShip(g, p, a.at)
       : kind === 'settlement' ? legalSettlement(g, p, a.at) : legalCity(g, p, a.at);
     if (!ok) fail(`Hier kannst du ${kind === 'ship' ? 'kein Schiff' : kind === 'road' ? 'keine Straße' : 'keine ' + PIECE_DE[kind]} bauen.`);
-    if (free) g.freeRoads--; else transfer(pl.res, g.bank, COSTS[kind]);
+    if (free) g.freeRoads--; else removeRes(pl.res, COSTS[kind]);
     if (kind === 'road' || kind === 'ship') {
       g.pieces.e[a.at] = { owner: p, type: kind, turn: g.turn };
       pl.left[kind]--;
@@ -577,7 +625,7 @@
     const pl = g.players[p];
     if (!g.devDeck.length) fail('Es gibt keine Entwicklungskarten mehr.');
     if (!hasRes(pl.res, COSTS.dev)) fail('Nicht genug Rohstoffe.');
-    transfer(pl.res, g.bank, COSTS.dev);
+    removeRes(pl.res, COSTS.dev);
     pl.dev.push({ type: g.devDeck.pop(), turn: g.turn });
     log(g, `📜 ${pl.name} kauft eine Entwicklungskarte.`);
   }
@@ -594,7 +642,7 @@
         pl.knights++;
         log(g, `⚔️ ${pl.name} spielt einen Ritter.`);
         updateLargestArmy(g, p);
-        g.returnPhase = g.phase; g.phase = 'robber';
+        enterRobber(g, g.phase);
         break;
       case 'roadBuilding':
         g.freeRoads = 2;
@@ -605,8 +653,7 @@
         if (!pickRes.every(x => RES.includes(x))) fail('Wähle zwei Rohstoffe.');
         const need = emptyRes();
         pickRes.forEach(x => { need[x]++; });
-        if (!hasRes(g.bank, need)) fail('Die Bank hat nicht genug davon.');
-        transfer(g.bank, pl.res, need);
+        addRes(pl.res, need);
         log(g, `🎁 ${pl.name} spielt Erfindung und nimmt ${fmtRes(need)}.`);
         break;
       }
@@ -629,9 +676,8 @@
     if (!RES.includes(give) || !RES.includes(get) || give === get) fail('Ungültiger Tausch.');
     const rate = tradeRate(g, p, give), pl = g.players[p];
     if (pl.res[give] < rate) fail(`Du brauchst ${rate} ${RES_DE[give]}.`);
-    if (g.bank[get] < 1) fail(`Die Bank hat kein ${RES_DE[get]} mehr.`);
-    pl.res[give] -= rate; g.bank[give] += rate;
-    g.bank[get]--; pl.res[get]++;
+    pl.res[give] -= rate;
+    pl.res[get]++;
     log(g, `🏦 ${pl.name} tauscht ${rate} ${RES_DE[give]} gegen 1 ${RES_DE[get]} mit der Bank.`);
   }
 
@@ -659,6 +705,8 @@
     transfer(A.res, P.res, t.give);
     transfer(P.res, A.res, t.get);
     g.trade = null;
+    g.tradeSeq = (g.tradeSeq || 0) + 1;
+    g.lastTrade = { id: g.tradeSeq, from: t.from, to: p, give: t.give, get: t.get };
     log(g, `🤝 Tausch: ${A.name} gibt ${fmtRes(t.give)} an ${P.name} und bekommt ${fmtRes(t.get)}.`);
   }
 
@@ -686,12 +734,36 @@
     }
   }
 
+  // Rückgängig: vor jeder umkehrbaren Aktion wird ein Schnappschuss gespeichert.
+  // Würfeln, Karten ziehen, Entwicklungskarten und Handel mit anderen sind endgültig.
+  const UNDOABLE = ['build', 'moveShip', 'bankTrade'];
+  const FINAL = ['roll', 'buyDev', 'playDev', 'steal', 'endTurn', 'tradeAccept', 'discard'];
+  function snapshot(g) { const u = g._undo; delete g._undo; const s = JSON.stringify(g); g._undo = u; return s; }
+  function doUndo(g, p) {
+    const stack = g._undo || [];
+    if (!stack.length) fail('Es gibt nichts rückgängig zu machen.');
+    const snap = JSON.parse(stack.pop());
+    for (const k of Object.keys(g)) delete g[k];
+    Object.assign(g, snap);
+    g._undo = stack;
+    log(g, `↩️ ${name(g, p)} macht einen Zug rückgängig.`);
+  }
+
   function applyAction(g, userId, a) {
     if (!a || typeof a.type !== 'string') fail('Ungültige Aktion.');
     const p = g.players.findIndex(pl => pl.userId === userId);
     if (g.status === 'lobby') return lobbyAction(g, userId, p, a);
     if (g.status === 'finished') fail('Das Spiel ist beendet.');
     if (p < 0) fail('Du spielst in diesem Spiel nicht mit.');
+    if (a.type === 'undo') { if (p !== g.current) fail('Du bist nicht am Zug.'); return doUndo(g, p); }
+    const snap = UNDOABLE.includes(a.type) && p === g.current ? snapshot(g) : null;
+    runAction(g, p, a);
+    if (snap) (g._undo = g._undo || []).push(snap);
+    if (FINAL.includes(a.type)) g._undo = [];
+    if (g._undo && g._undo.length > 40) g._undo.shift();
+  }
+
+  function runAction(g, p, a) {
     switch (a.type) { // Aktionen, die auch Nicht-aktive Spieler machen
       case 'discard': return doDiscard(g, p, a);
       case 'gold': return doGold(g, p, a);
@@ -709,19 +781,14 @@
       case 'buyDev': needPhase(g, 'main'); buyDev(g, p); break;
       case 'playDev': playDev(g, p, a); break;
       case 'moveRobber': needPhase(g, 'robber'); moveRobber(g, p, a); break;
-      case 'steal': {
-        needPhase(g, 'steal');
-        const t = Number(a.target);
-        if (!g.stealFrom.includes(t)) fail('Von diesem Spieler kannst du nicht stehlen.');
-        stealFrom(g, p, t);
-        g.stealFrom = [];
-        g.phase = g.returnPhase || 'main';
-        break;
-      }
+      case 'steal': needPhase(g, 'robber'); doSteal(g, p, a); break;
       case 'bankTrade': needPhase(g, 'main'); bankTrade(g, p, a); break;
       case 'tradePropose': needPhase(g, 'main'); tradePropose(g, p, a); break;
       case 'tradeCancel': if (g.trade && g.trade.from === p) g.trade = null; break;
-      case 'endTurn': needPhase(g, 'main'); endTurn(g, p); break;
+      case 'endTurn':
+        if (g.phase === 'setup') setupEndTurn(g, p);
+        else { needPhase(g, 'main'); endTurn(g, p); }
+        break;
       default: fail('Unbekannte Aktion.');
     }
     if (g.status === 'playing' && g.phase !== 'setup') checkWin(g);
@@ -742,15 +809,22 @@
       });
       v.devDeckCount = (v.devDeck || []).length;
       delete v.devDeck;
+      if (v.lastSteal) {
+        v.lastSteal.hadCard = !!v.lastSteal.res;
+        if (me !== v.lastSteal.thief && me !== v.lastSteal.victim) v.lastSteal.res = null;
+      }
+      if (v.phase === 'robber' && v.robberMoved) v.stealCandidates = stealCandidates(g, g.current);
     }
+    v.undoCount = (g._undo || []).length;
+    delete v._undo;
     return v;
   }
 
   return {
-    RES, RES_DE, COSTS, DEV_DE, PIECE_DE, COLORS, ISLAND_BONUS, GameError,
+    RES, RES_DE, COSTS, DEV_DE, PIECE_DE, COLORS, ISLAND_BONUS, STATE_VERSION, GameError,
     emptyRes, sumRes, hasRes, fmtRes,
     createGame, addPlayer, applyAction, viewFor,
     legalSpots, legalRoad, legalShip, legalSettlement, legalCity, movableShips, shipMoveTargets,
-    tradeRate, vp, longestRoute,
+    tradeRate, vp, longestRoute, stealCandidates,
   };
 });

@@ -1,4 +1,4 @@
-# ⛵ Archipel – Prototyp
+# ⛵ Inselrunde – Prototyp
 
 Browser-Spiel für 2–4 Spieler: Inseln besiedeln, Rohstoffe sammeln, handeln, Straßen und Schiffe bauen.
 Alles läuft in Docker (App + PostgreSQL), lokal muss nichts installiert werden außer Docker.
@@ -20,32 +20,47 @@ In `docker-compose.yml` unter `APP_USERS` (Format `Name:Passwort,Name:Passwort`)
 
 | Name    | Passwort |
 |---------|----------|
-| Felix   | test     |
-| Papa    | test     |
-| Bruder1 | test     |
-| Bruder2 | test     |
+| Felix       | test     |
+| Günther     | test     |
+| Kühlschrank | test     |
+| Jonas       | test     |
 
-Nach einer Änderung `docker compose up -d` ausführen – Accounts/Passwörter werden beim Start aktualisiert.
+Nur **Felix** (`MAP_EDITOR` in `docker-compose.yml`) kann Spiele erstellen, die Karte generieren/bearbeiten und das Spiel starten.
+Die anderen treten bei, wählen ihre Farbe (Rot, Blau, Orange, Weiß, Grün) und sehen die Kartenbearbeitung live.
+
+Nach einer Änderung `docker compose up -d` ausführen – Accounts/Passwörter werden beim Start aktualisiert,
+Accounts die nicht mehr in der Liste stehen werden gelöscht.
 Groß-/Kleinschreibung beim Namen ist egal.
 
 ## Mit mehreren Accounts lokal testen
 
-Jeder Browser hat eigene Cookies, also eigene Logins: z. B. Chrome = Felix, Edge = Papa,
-Chrome-Inkognito = Bruder1, Edge-InPrivate = Bruder2. (Zwei Tabs im selben Browser teilen sich den Login.)
+Jeder Browser hat eigene Cookies, also eigene Logins: z. B. Chrome = Felix, Edge = Günther,
+Chrome-Inkognito = Kühlschrank, Edge-InPrivate = Jonas. (Zwei Tabs im selben Browser teilen sich den Login.)
 
 ## Ablauf
 
-1. **Lobby**: Spiel erstellen (Feldgröße für 3 oder 4 Spieler, 2 oder 3 Inseln). Die anderen klicken „Beitreten“.
-2. **Karten-Editor** (alle sehen Änderungen live): Zufallskarte erzeugen, Felder tauschen, Zahlen tauschen,
+1. **Lobby**: Felix erstellt ein Spiel (Feldgröße für 3 oder 4 Spieler, 2 oder 3 Inseln). Die anderen klicken „Beitreten“
+   und wählen ihre Farbe.
+2. **Karten-Editor** (nur Felix, alle sehen es live): Zufallskarte erzeugen, Felder tauschen, Zahlen tauschen,
    Felder übermalen, Zahlen setzen, Häfen neu verteilen, Siegpunktziel einstellen.
-3. **Start** (nur der Ersteller): Reihenfolge wird ausgelost. Aufbau: jeder setzt 2× Siedlung + Straße/Schiff
-   (Schlangenreihenfolge, nur auf der größten Insel = Startinsel). Die zweite Siedlung bringt Starterträge.
-4. **Spielzug**: Würfeln → Erträge → bauen / handeln / Entwicklungskarten → „Zug beenden“.
+   Die Karten sind wie das echte Brett: Land bis zum Rahmen, ein Wasserstreifen zwischen den Inseln, manchmal ein See.
+3. **Start**: Reihenfolge wird ausgelost. Aufbau: jeder setzt 2× Siedlung + Straße/Schiff (Schlangenreihenfolge,
+   auf jeder Insel erlaubt). Erst wenn alle fertig sind, bringen **beide** Startsiedlungen ihre Rohstoffe (Goldfluss: dann freie Wahl).
+4. **Spielzug**: Würfeln → Popup zeigt allen, wer was bekommt → bauen (Figuren aus dem Vorrat aufs Brett ziehen) /
+   handeln / Entwicklungskarten → „Zug beenden“.
+5. Baukosten, Würfelstatistik und Spielverlauf öffnest du oben rechts bei Bedarf.
 
 ## Umgesetzte Regeln
 
-- Würfeln mit Ertragsverteilung (Städte doppelt), Bank-Limits, Würfelstatistik (mit erwarteter Verteilung)
-- 7: Karten abwerfen (>7 Karten), Räuber (Land) **oder** Pirat (Meer) versetzen, Karte stehlen
+- Würfeln mit Ertragsverteilung (Städte doppelt), Würfelstatistik gesamt und pro Spieler
+- Rohstoffe sind unbegrenzt; nur Entwicklungskarten sind limitiert
+- Vorrat pro Spieler: 5 Siedlungen, 4 Städte, 30 Straßen, 30 Schiffe
+- 7 / Ritter: Karten abwerfen (>7 Karten), dann Räuber (Land) **oder** Pirat (Meer) per Drag & Drop versetzen –
+  beliebig oft umsetzen, bis man bei einem Spieler zieht. Ziehen ist Pflicht (hat er keine Karten, bekommt man nichts).
+  Danach Popup: Dieb und Opfer sehen die gezogene Karte, alle anderen nur, dass gezogen wurde.
+- Rückgängig: Bauen, Schiff versetzen und Bank-Tausch kann man im eigenen Zug zurücknehmen
+  (Würfeln, Karten ziehen, Entwicklungskarten und Handel mit Mitspielern sind endgültig)
+- Aufbau: nach Siedlung + Straße/Schiff gibt man mit „Zug beenden“ weiter (vorher noch umsetzbar)
 - Straßen, Siedlungen (Abstandsregel), Städte, Schiffe; Übergang Straße↔Schiff nur über eigene Siedlung
 - Schiffe versetzen (1× pro Zug, offenes Ende, nicht im selben Zug gebaut), Pirat blockiert Schiffe
 - Goldfluss: Rohstoff nach Wahl
@@ -60,7 +75,8 @@ Chrome-Inkognito = Bruder1, Edge-InPrivate = Bruder2. (Zwei Tabs im selben Brows
 - `server/index.js` – Express + Socket.io, Login (Cookie-Session), speichert Spielstände als JSON in Postgres
 - `shared/board.js` – Hex-Geometrie, Inselgenerator, Häfen
 - `shared/engine.js` – Spielregeln (Server prüft alle Züge; Browser nutzt dieselben Funktionen zum Markieren)
-- `public/` – Oberfläche (Vanilla JS + SVG, kein Build-Schritt)
+- `public/app.js` – Oberfläche (Vanilla JS + SVG, kein Build-Schritt)
+- `public/art.js` – Vektor-Grafiken für Felder, Figuren und Häfen
 
 ## Auf einen Server bringen
 

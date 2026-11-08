@@ -12,6 +12,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const games = new Map();      // id -> Spielzustand (im Speicher, in Postgres gesichert)
 const sessions = new Map();   // token -> { id, name }
 const saveChains = new Map(); // id -> Promise (Speichern nacheinander)
+const MAP_EDITOR = (process.env.MAP_EDITOR || 'Felix').trim().toLowerCase();
+const isEditor = u => !!u && u.name.toLowerCase() === MAP_EDITOR;
 
 // ---------- Datenbank ----------
 const hashPw = (pw, salt) => crypto.scryptSync(String(pw), salt, 32).toString('hex');
@@ -33,11 +35,13 @@ async function initDb() {
     id SERIAL PRIMARY KEY, state JSONB NOT NULL, updated TIMESTAMPTZ NOT NULL DEFAULT now())`);
 
   // Accounts aus APP_USERS ("Name:Passwort,Name:Passwort") anlegen bzw. Passwort aktualisieren
-  const spec = process.env.APP_USERS || 'Spieler1:test,Spieler2:test,Spieler3:test,Spieler4:test';
+  const spec = process.env.APP_USERS || 'Felix:test,Günther:test,Kühlschrank:test,Jonas:test';
+  const names = [];
   for (const entry of spec.split(',').map(s => s.trim()).filter(Boolean)) {
     const i = entry.indexOf(':');
     if (i < 1) continue;
     const name = entry.slice(0, i).trim(), pw = entry.slice(i + 1);
+    names.push(name);
     const salt = crypto.randomBytes(16).toString('hex');
     await pool.query(
       `INSERT INTO users (name, salt, hash) VALUES ($1, $2, $3)
@@ -46,8 +50,14 @@ async function initDb() {
     console.log(`Account bereit: ${name}`);
   }
 
+  // Accounts, die nicht mehr in APP_USERS stehen, entfernen
+  await pool.query('DELETE FROM users WHERE NOT (name = ANY($1::text[]))', [names]);
+
   const r = await pool.query('SELECT id, state FROM games');
-  for (const row of r.rows) if (row.state && row.state.id) games.set(row.id, row.state);
+  for (const row of r.rows) {
+    if (row.state && row.state.id && row.state.version === E.STATE_VERSION) games.set(row.id, row.state);
+    else await pool.query('DELETE FROM games WHERE id = $1', [row.id]); // alter, inkompatibler Spielstand
+  }
   console.log(`${games.size} Spiel(e) geladen.`);
 }
 
@@ -90,7 +100,7 @@ app.post('/api/login', async (req, res) => {
     const token = crypto.randomBytes(24).toString('hex');
     await pool.query('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [token, u.id]);
     res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 60}`);
-    res.json({ user: { id: u.id, name: u.name } });
+    res.json({ user: { id: u.id, name: u.name, editor: isEditor(u) } });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Serverfehler' }); }
 });
 
@@ -104,7 +114,7 @@ app.post('/api/logout', async (req, res) => {
 app.get('/api/me', async (req, res) => {
   const u = await userFromCookie(req.headers.cookie).catch(() => null);
   if (!u) return res.status(401).json({ error: 'Nicht eingeloggt' });
-  res.json({ user: u });
+  res.json({ user: { ...u, editor: isEditor(u) } });
 });
 
 app.use('/shared', express.static(path.join(__dirname, '..', 'shared')));
@@ -145,6 +155,7 @@ io.on('connection', socket => {
   socket.on('lobby:list', () => socket.emit('games', gameList()));
 
   socket.on('game:create', async (d, ack) => {
+    if (!isEditor(user)) return reply(ack, { error: 'Nur ' + (process.env.MAP_EDITOR || 'Felix') + ' kann Spiele erstellen.' });
     try {
       d = d || {};
       const r = await pool.query("INSERT INTO games (state) VALUES ('{}') RETURNING id");

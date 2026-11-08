@@ -19,18 +19,18 @@
     'forest', 'pasture', 'fields', 'hills', 'mountains',
     'forest', 'pasture', 'fields', 'hills', 'mountains',
     'forest', 'pasture', 'fields'];
-  const SQ3 = Math.sqrt(3);
 
-  // Kartengröße: 3-Spieler-Feld und 4-Spieler-Feld
-  const SIZE_CONFIG = {
-    3: { radius: 4, land: 21, harbors: { any: 3, specific: 4 } },
-    4: { radius: 5, land: 31, harbors: { any: 4, specific: 5 } },
+  // Spielfeld-Formen (Zeilenbreiten). Das Meer-Rahmenteil liegt außen herum und ist kein Hexfeld.
+  const SHAPES = {
+    3: { rows: [4, 5, 6, 7, 6, 5, 4], deserts: 1, gold: 1, harbors: { any: 3, specific: 5 } },
+    4: { rows: [6, 7, 8, 9, 8, 7, 6], deserts: 2, gold: 2, harbors: { any: 5, specific: 5 } },
   };
 
   const hk = (q, r) => q + ',' + r;
   const parseHex = k => { const p = k.split(','); return { q: +p[0], r: +p[1] }; };
   const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
   const neighbors = h => DIRS.map(d => ({ q: h.q + d[0], r: h.r + d[1] }));
+  const neighborKeys = k => neighbors(parseHex(k)).map(n => hk(n.q, n.r));
   const isLand = t => !!t && t !== 'sea';
   const isProducing = t => isLand(t) && t !== 'desert';
 
@@ -49,20 +49,23 @@
     return items[items.length - 1];
   }
 
-  function gridCoords(R) {
-    const out = [];
-    for (let q = -R; q <= R; q++) for (let r = -R; r <= R; r++) if (Math.abs(q + r) <= R) out.push({ q, r });
+  function shapeCoords(size) {
+    const rows = SHAPES[size].rows, h = (rows.length - 1) / 2, out = [];
+    rows.forEach((w, i) => {
+      const r = i - h, start = -(w - 1 + r) / 2;
+      for (let j = 0; j < w; j++) out.push({ q: start + j, r });
+    });
     return out;
   }
 
-  // Graph aus Ecken (vertices) und Kanten (edges) – hängt nur vom Radius ab.
+  // Graph aus Ecken und Kanten – hängt nur von der Feldform ab.
   const graphCache = {};
-  function buildGraph(R) {
-    if (graphCache[R]) return graphCache[R];
+  function buildGraph(size) {
+    size = size === 3 ? 3 : 4;
+    if (graphCache[size]) return graphCache[size];
     const vertices = {}, edges = {}, hexVerts = {}, hexEdges = {};
-    for (const { q, r } of gridCoords(R)) {
-      const key = hk(q, r);
-      const vs = [];
+    for (const { q, r } of shapeCoords(size)) {
+      const key = hk(q, r), vs = [];
       for (const [dx, dy] of CORNERS) {
         const X = 2 * q + r + dx, Y = 3 * r + dy, vk = X + ',' + Y;
         vs.push(vk);
@@ -84,66 +87,98 @@
       }
       hexEdges[key] = es;
     }
-    graphCache[R] = { R, vertices, edges, hexVerts, hexEdges };
-    return graphCache[R];
+    graphCache[size] = { size, vertices, edges, hexVerts, hexEdges };
+    return graphCache[size];
   }
 
-  // Pixelpositionen bei Hex-Radius 1
+  const SQ3 = Math.sqrt(3);
   const hexCenter = (q, r) => ({ x: SQ3 * (q + r / 2), y: 1.5 * r });
   function vertexPos(vk) { const p = vk.split(','); return { x: (+p[0]) * SQ3 / 2, y: (+p[1]) / 2 }; }
 
   // ---------- Inselgenerator ----------
-  function islandSizes(total, count) {
-    const s = count === 2 ? [Math.round(total * 0.62)] : [Math.round(total * 0.5), Math.round(total * 0.27)];
-    s.push(total - s.reduce((a, b) => a + b, 0));
-    return s;
+  // 1) Feld in N zusammenhängende Regionen aufteilen  2) zwischen Regionen genau einen Wasserstreifen
+  // 3) optional ein See im Inselinneren.
+  function components(keys, t) {
+    const set = new Set(keys), comp = {}, sizes = [];
+    for (const k of keys) {
+      if (t[k] === 'sea' || comp[k] !== undefined) continue;
+      const id = sizes.length, stack = [k];
+      let n = 0;
+      comp[k] = id;
+      while (stack.length) {
+        const c = stack.pop(); n++;
+        for (const nk of neighborKeys(c)) {
+          if (set.has(nk) && t[nk] !== 'sea' && comp[nk] === undefined) { comp[nk] = id; stack.push(nk); }
+        }
+      }
+      sizes.push(n);
+    }
+    return { comp, sizes };
   }
 
-  function tryIslands(R, total, count) {
-    const inner = gridCoords(R).filter(h => hexDist(h, { q: 0, r: 0 }) < R); // äußerster Ring bleibt Meer
-    const innerSet = new Set(inner.map(h => hk(h.q, h.r)));
-    const sizes = islandSizes(total, count);
+  function tryLayout(size, count) {
+    const coords = shapeCoords(size), keys = coords.map(c => hk(c.q, c.r)), set = new Set(keys);
     let seeds = null, best = -1;
-    for (let t = 0; t < 80; t++) {
-      const cand = shuffle(inner.slice()).slice(0, count);
+    for (let i = 0; i < 80; i++) {
+      const cand = shuffle(coords.slice()).slice(0, count);
       let minD = Infinity;
-      for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) minD = Math.min(minD, hexDist(cand[i], cand[j]));
+      for (let a = 0; a < count; a++) for (let b = a + 1; b < count; b++) minD = Math.min(minD, hexDist(cand[a], cand[b]));
       const score = minD + Math.random();
       if (score > best) { best = score; seeds = cand; }
     }
-    const owner = {}, counts = new Array(count).fill(0);
-    seeds.forEach((s, i) => { owner[hk(s.q, s.r)] = i; counts[i] = 1; });
-    const canJoin = (h, i) => {
-      const k = hk(h.q, h.r);
-      if (!innerSet.has(k) || owner[k] !== undefined) return false;
-      // Inseln dürfen sich nicht berühren -> immer mindestens ein Meerfeld dazwischen
-      return neighbors(h).every(n => { const o = owner[hk(n.q, n.r)]; return o === undefined || o === i; });
-    };
-    for (;;) {
-      const pending = [];
-      for (let i = 0; i < count; i++) if (counts[i] < sizes[i]) pending.push(i);
-      if (!pending.length) return owner;
-      pending.sort((a, b) => counts[a] / sizes[a] - counts[b] / sizes[b]);
-      const i = pending[0];
-      const front = new Map();
-      for (const k in owner) {
-        if (owner[k] !== i) continue;
-        for (const n of neighbors(parseHex(k))) {
-          if (canJoin(n, i)) { const nk = hk(n.q, n.r); front.set(nk, (front.get(nk) || 0) + 1); }
+    const region = {}, weight = [];
+    seeds.forEach((s, i) => { region[hk(s.q, s.r)] = i; weight.push((i === 0 ? 1.35 : 1) * (0.8 + Math.random() * 0.4)); });
+    let left = keys.length - count;
+    while (left > 0) {
+      const fronts = [];
+      for (let i = 0; i < count; i++) {
+        const f = new Map();
+        for (const k in region) {
+          if (region[k] !== i) continue;
+          for (const nk of neighborKeys(k)) if (set.has(nk) && region[nk] === undefined) f.set(nk, (f.get(nk) || 0) + 1);
         }
+        fronts.push(f);
       }
-      if (!front.size) return null;
-      const keys = [...front.keys()];
-      owner[weightedPick(keys, keys.map(k => Math.pow(front.get(k), 2.2)))] = i;
-      counts[i]++;
+      const able = [];
+      for (let i = 0; i < count; i++) if (fronts[i].size) able.push(i);
+      if (!able.length) return null;
+      const i = weightedPick(able, able.map(x => weight[x]));
+      const fk = [...fronts[i].keys()];
+      region[weightedPick(fk, fk.map(k => Math.pow(fronts[i].get(k), 2)))] = i;
+      left--;
     }
+    const t = {};
+    keys.forEach(k => { t[k] = 'land'; });
+    // Schmalster Kanal: immer das Feld mit den meisten "fremden" Land-Nachbarn zu Wasser machen
+    const conflicts = k => neighborKeys(k).filter(nk => set.has(nk) && t[nk] === 'land' && region[nk] !== region[k]).length;
+    for (;;) {
+      let bestK = null, bestC = 0;
+      for (const k of shuffle(keys.slice())) {
+        if (t[k] !== 'land') continue;
+        const c = conflicts(k);
+        if (c > bestC) { bestC = c; bestK = k; }
+      }
+      if (!bestK) break;
+      t[bestK] = 'sea';
+    }
+    // Seen: innere Felder (alle 6 Nachbarn Land) können zu Wasser werden
+    const lakes = Math.random() < 0.55 ? (size === 4 && Math.random() < 0.3 ? 2 : 1) : 0;
+    for (let l = 0; l < lakes; l++) {
+      const inner = keys.filter(k => t[k] === 'land' && neighborKeys(k).every(nk => set.has(nk) && t[nk] === 'land'));
+      if (inner.length) t[pick(inner)] = 'sea';
+    }
+    const { sizes } = components(keys, t);
+    if (sizes.length !== count || Math.min(...sizes) < 5) return null;
+    const water = keys.filter(k => t[k] === 'sea').length / keys.length;
+    if (water < 0.1 || water > (count === 3 ? 0.32 : 0.26)) return null;
+    return t;
   }
 
   function countRedAdjacent(assign) {
     let bad = 0;
     for (const k in assign) {
       if (assign[k] !== 6 && assign[k] !== 8) continue;
-      for (const n of neighbors(parseHex(k))) { const v = assign[hk(n.q, n.r)]; if (v === 6 || v === 8) bad++; }
+      for (const nk of neighborKeys(k)) { const v = assign[nk]; if (v === 6 || v === 8) bad++; }
     }
     return bad;
   }
@@ -165,20 +200,31 @@
     for (const k in best) map.hexes[k].n = best[k];
   }
 
+  // Hafen-Kanten: Land neben Meerfeld oder Land am Spielfeldrand (dort liegt das Meer-Rahmenteil)
+  function harborEdgeValid(map, ek) {
+    const e = buildGraph(map.size).edges[ek];
+    if (!e) return false;
+    const ts = e.hexes.map(h => map.hexes[h].t);
+    if (ts.length === 1) return isLand(ts[0]);
+    return isLand(ts[0]) !== isLand(ts[1]);
+  }
   function coastalEdges(map) {
-    const g = buildGraph(map.radius), out = [];
-    for (const ek in g.edges) {
-      const e = g.edges[ek];
-      if (e.hexes.length !== 2) continue;
-      const a = map.hexes[e.hexes[0]], b = map.hexes[e.hexes[1]];
-      if (isLand(a.t) !== isLand(b.t)) out.push(ek);
-    }
-    return out;
+    return Object.keys(buildGraph(map.size).edges).filter(ek => harborEdgeValid(map, ek));
+  }
+  // Richtung "aufs Meer hinaus" für eine Hafenkante (Einheits-Koordinaten)
+  function harborGeometry(map, ek) {
+    const g = buildGraph(map.size), e = g.edges[ek];
+    const a = vertexPos(e.a), b = vertexPos(e.b), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const landHex = e.hexes.find(h => isLand(map.hexes[h].t)) || e.hexes[0];
+    const lh = map.hexes[landHex], lc = hexCenter(lh.q, lh.r);
+    let dx = mid.x - lc.x, dy = mid.y - lc.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    return { a, b, mid, dir: { x: dx, y: dy } };
   }
 
   function placeHarbors(map) {
-    const g = buildGraph(map.radius);
-    const cfg = SIZE_CONFIG[map.size] || SIZE_CONFIG[4];
+    const g = buildGraph(map.size), cfg = SHAPES[map.size];
     const types = [];
     for (let i = 0; i < cfg.harbors.any; i++) types.push('any');
     types.push(...shuffle(RESOURCES.slice()).slice(0, cfg.harbors.specific));
@@ -189,7 +235,10 @@
       const e = g.edges[ek];
       if (blocked.has(e.a) || blocked.has(e.b)) continue;
       harbors.push({ edge: ek, type: types[harbors.length] });
-      for (const v of [e.a, e.b]) { blocked.add(v); g.vertices[v].adj.forEach(x => blocked.add(x)); }
+      for (const v of [e.a, e.b]) {
+        blocked.add(v);
+        g.vertices[v].adj.forEach(x => { blocked.add(x); g.vertices[x].adj.forEach(y => blocked.add(y)); });
+      }
     }
     map.harbors = harbors;
   }
@@ -203,69 +252,52 @@
     }
     if (!map.pirate || !map.hexes[map.pirate] || isLand(map.hexes[map.pirate].t)) {
       const seas = keys.filter(k => map.hexes[k].t === 'sea');
-      const far = seas.filter(k => neighbors(parseHex(k)).every(n => { const h = map.hexes[hk(n.q, n.r)]; return !h || !isLand(h.t); }));
-      map.pirate = (far.length ? pick(far) : pick(seas)) || null;
+      map.pirate = seas.length ? pick(seas) : null;
     }
-    const coast = new Set(coastalEdges(map));
-    map.harbors = (map.harbors || []).filter(h => coast.has(h.edge));
+    map.harbors = (map.harbors || []).filter(h => harborEdgeValid(map, h.edge));
   }
 
   function generateMap(size, islands) {
     size = size === 3 ? 3 : 4;
     islands = islands === 3 ? 3 : 2;
-    const cfg = SIZE_CONFIG[size], R = cfg.radius;
-    let owner = null, total = cfg.land;
-    while (!owner) {
-      for (let a = 0; a < 200 && !owner; a++) owner = tryIslands(R, total, islands);
-      if (!owner) total--;
-    }
+    const cfg = SHAPES[size];
+    let layout = null;
+    for (let a = 0; a < 2000 && !layout; a++) layout = tryLayout(size, islands);
+    if (!layout) throw new Error('Konnte keine Karte erzeugen');
     const hexes = {};
-    for (const h of gridCoords(R)) hexes[hk(h.q, h.r)] = { q: h.q, r: h.r, t: 'sea', n: null };
-    const byIsland = [];
-    for (let i = 0; i < islands; i++) byIsland.push([]);
-    for (const k in owner) byIsland[owner[k]].push(k);
-    const special = {};
-    special[pick(byIsland[0])] = 'desert';
-    for (let i = 1; i < islands; i++) special[pick(byIsland[i])] = 'gold';
-    const rest = Object.keys(owner).filter(k => !special[k]);
+    for (const c of shapeCoords(size)) { const k = hk(c.q, c.r); hexes[k] = { q: c.q, r: c.r, t: layout[k] === 'sea' ? 'sea' : null, n: null }; }
+    const landKeys = Object.keys(hexes).filter(k => hexes[k].t === null);
+    const { comp, sizes } = components(Object.keys(hexes), Object.fromEntries(Object.keys(hexes).map(k => [k, hexes[k].t === 'sea' ? 'sea' : 'land'])));
+    // Gold bevorzugt auf kleineren Inseln
+    const order = sizes.map((s, i) => i).sort((a, b) => sizes[a] - sizes[b]);
+    const free = shuffle(landKeys.slice());
+    const take = pred => { const i = free.findIndex(pred); return i >= 0 ? free.splice(i, 1)[0] : free.shift(); };
+    for (let i = 0; i < cfg.gold; i++) { const isl = order[i % order.length]; hexes[take(k => comp[k] === isl)].t = 'gold'; }
+    for (let i = 0; i < cfg.deserts; i++) hexes[take(() => true)].t = 'desert';
     const pool = [];
-    while (pool.length < rest.length) pool.push(...shuffle(TERRAIN_CYCLE.slice()));
-    pool.length = rest.length;
+    while (pool.length < free.length) pool.push(...shuffle(TERRAIN_CYCLE.slice()));
+    pool.length = free.length;
     shuffle(pool);
-    rest.forEach((k, i) => { hexes[k].t = pool[i]; });
-    for (const k in special) hexes[k].t = special[k];
-    const map = { size, islands, radius: R, hexes, harbors: [], robber: null, pirate: null };
+    free.forEach((k, i) => { hexes[k].t = pool[i]; });
+    const map = { size, islands, hexes, harbors: [], robber: null, pirate: null };
     assignNumbers(map);
     placeHarbors(map);
     fixTokens(map);
     return map;
   }
 
-  // Zusammenhängende Landmassen bestimmen
   function computeIslands(map) {
-    const islandOf = {}, sizes = [];
-    for (const k in map.hexes) {
-      if (!isLand(map.hexes[k].t) || islandOf[k] !== undefined) continue;
-      const id = sizes.length;
-      let n = 0;
-      const stack = [k];
-      islandOf[k] = id;
-      while (stack.length) {
-        const c = stack.pop(); n++;
-        for (const nb of neighbors(parseHex(c))) {
-          const nk = hk(nb.q, nb.r), h = map.hexes[nk];
-          if (h && isLand(h.t) && islandOf[nk] === undefined) { islandOf[nk] = id; stack.push(nk); }
-        }
-      }
-      sizes.push(n);
-    }
-    return { islandOf, sizes };
+    const keys = Object.keys(map.hexes);
+    const t = {};
+    keys.forEach(k => { t[k] = isLand(map.hexes[k].t) ? 'land' : 'sea'; });
+    const { comp, sizes } = components(keys, t);
+    return { islandOf: comp, sizes };
   }
 
   return {
-    DIRS, RESOURCES, RESOURCE_OF, LAND_TERRAINS, ALL_TERRAINS, NUMBERS, SIZE_CONFIG,
+    DIRS, RESOURCES, RESOURCE_OF, LAND_TERRAINS, ALL_TERRAINS, NUMBERS, SHAPES,
     hk, parseHex, hexDist, neighbors, isLand, isProducing, shuffle, pick,
-    gridCoords, buildGraph, hexCenter, vertexPos,
-    generateMap, assignNumbers, placeHarbors, fixTokens, coastalEdges, computeIslands,
+    shapeCoords, buildGraph, hexCenter, vertexPos,
+    generateMap, assignNumbers, placeHarbors, fixTokens, coastalEdges, harborEdgeValid, harborGeometry, computeIslands,
   };
 });

@@ -22,7 +22,9 @@ services:
     environment:
       DATABASE_URL: postgres://archipel:archipel@db:5432/archipel
       # Die vier Accounts: Name:Passwort, durch Komma getrennt. Hier anpassen!
-      APP_USERS: "Felix:test,Papa:test,Bruder1:test,Bruder2:test"
+      APP_USERS: "Felix:test,Günther:test,Kühlschrank:test,Jonas:test"
+      # Nur dieser Account kann Spiele erstellen und die Karte bearbeiten
+      MAP_EDITOR: "Felix"
     depends_on:
       db:
         condition: service_healthy
