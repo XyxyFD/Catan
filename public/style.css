@@ -332,3 +332,5 @@ table.st th:first-child, table.st td:first-child { text-align: left; }
 
 /* Gleiches Fenster neu gezeichnet: nicht erneut einblenden */
 #overlay.still .overlay-back, #overlay.still .modal, #overlay.still .drawer { animation: none; }
+
+.dcard.played { background: linear-gradient(160deg, #4a4f5c, #2a2e38); opacity: .9; cursor: default; }

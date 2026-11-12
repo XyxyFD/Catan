@@ -54,7 +54,7 @@ Chrome-Inkognito = Kühlschrank, Edge-InPrivate = Jonas. (Zwei Tabs im selben Br
 
 - Würfeln mit Ertragsverteilung (Städte doppelt), Würfelstatistik gesamt und pro Spieler
 - Rohstoffe sind unbegrenzt; nur Entwicklungskarten sind limitiert
-- Vorrat pro Spieler: 5 Siedlungen, 4 Städte, 30 Straßen, 30 Schiffe
+- Vorrat pro Spieler (laut Anleitung): 5 Siedlungen, 4 Städte, 15 Straßen, 15 Schiffe
 - 7 / Ritter: Karten abwerfen (>7 Karten), dann Räuber (Land) **oder** Pirat (Meer) per Drag & Drop versetzen –
   beliebig oft umsetzen, bis man bei einem Spieler zieht. Ziehen ist Pflicht (hat er keine Karten, bekommt man nichts).
   Danach Popup: Dieb und Opfer sehen die gezogene Karte, alle anderen nur, dass gezogen wurde.

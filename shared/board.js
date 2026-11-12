@@ -20,11 +20,25 @@
     'forest', 'pasture', 'fields', 'hills', 'mountains',
     'forest', 'pasture', 'fields'];
 
-  // Spielfeld-Formen (Zeilenbreiten). Das Meer-Rahmenteil liegt außen herum und ist kein Hexfeld.
+  // Spielfeld-Formen laut Anleitung "Seefahrer" (3-4 Spieler): 7 Zeilen, jede Zeile gleich breit, versetzt.
+  //   3 Spieler: 7 x 5 = 35 Felder, 4 Spieler: 7 x 6 = 42 Felder (Szenario "Zu neuen Ufern").
+  // Zusammensetzung = Hauptinsel + kleine Inseln aus der Materialtabelle des Szenarios.
   const SHAPES = {
-    3: { rows: [4, 5, 6, 7, 6, 5, 4], deserts: 1, gold: 1, harbors: { any: 3, specific: 5 } },
-    4: { rows: [6, 7, 8, 9, 8, 7, 6], deserts: 2, gold: 2, harbors: { any: 5, specific: 5 } },
+    3: {
+      cols: 5, rowCount: 7,
+      sea: 13, terrains: { desert: 1, gold: 2, fields: 4, hills: 4, mountains: 4, pasture: 4, forest: 3 },
+      numbers: { 2: 1, 3: 2, 4: 2, 5: 3, 6: 2, 8: 3, 9: 2, 10: 3, 11: 2, 12: 1 },
+      harbors: { any: 3, specific: 5 },
+    },
+    4: {
+      cols: 6, rowCount: 7,
+      sea: 14, terrains: { desert: 1, gold: 2, fields: 5, hills: 5, mountains: 5, pasture: 5, forest: 5 },
+      numbers: { 2: 2, 3: 3, 4: 3, 5: 3, 6: 3, 8: 3, 9: 3, 10: 3, 11: 3, 12: 1 },
+      harbors: { any: 4, specific: 5 },
+    },
   };
+  // Gold soll nie auf den schwächsten Zahlen liegen.
+  const WEAK_NUMBERS = [2, 3, 11, 12];
 
   const hk = (q, r) => q + ',' + r;
   const parseHex = k => { const p = k.split(','); return { q: +p[0], r: +p[1] }; };
@@ -50,11 +64,11 @@
   }
 
   function shapeCoords(size) {
-    const rows = SHAPES[size].rows, h = (rows.length - 1) / 2, out = [];
-    rows.forEach((w, i) => {
-      const r = i - h, start = -(w - 1 + r) / 2;
-      for (let j = 0; j < w; j++) out.push({ q: start + j, r });
-    });
+    const cfg = SHAPES[size], h = (cfg.rowCount - 1) / 2, out = [];
+    for (let i = 0; i < cfg.rowCount; i++) {
+      const r = i - h;
+      for (let c = 0; c < cfg.cols; c++) out.push({ q: c - Math.floor(r / 2), r });
+    }
     return out;
   }
 
@@ -161,16 +175,43 @@
       if (!bestK) break;
       t[bestK] = 'sea';
     }
-    // Seen: innere Felder (alle 6 Nachbarn Land) können zu Wasser werden
-    const lakes = Math.random() < 0.55 ? (size === 4 && Math.random() < 0.3 ? 2 : 1) : 0;
-    for (let l = 0; l < lakes; l++) {
+    return adjustToTarget(keys, set, t, count, SHAPES[size].sea);
+  }
+
+  // Meeranteil exakt auf die Vorgabe der Anleitung bringen (Seen, Küstenfelder abtragen bzw. Meer auffüllen).
+  function adjustToTarget(keys, set, t, count, target) {
+    const seaCount = () => keys.filter(k => t[k] === 'sea').length;
+    const ok = () => { const { sizes } = components(keys, t); return sizes.length === count && Math.min(...sizes) >= 4; };
+    if (seaCount() > target) {
+      // zu viel Meer: Meerfelder, die nur an eine einzige Insel grenzen, wieder zu Land machen
+      for (let g = 0; g < 200 && seaCount() > target; g++) {
+        const c = shuffle(keys.filter(k => {
+          if (t[k] !== 'sea') return false;
+          const land = neighborKeys(k).filter(nk => set.has(nk) && t[nk] !== 'sea');
+          if (!land.length) return false;
+          const { comp } = components(keys, t);
+          return new Set(land.map(nk => comp[nk])).size === 1;
+        }));
+        if (!c.length) break;
+        t[c[0]] = 'land';
+        if (!ok()) t[c[0]] = 'sea';
+      }
+    }
+    // Seen im Inselinneren (alle 6 Nachbarn Land)
+    let lakes = Math.random() < 0.6 ? (Math.random() < 0.3 ? 2 : 1) : 0;
+    while (lakes-- > 0 && seaCount() < target) {
       const inner = keys.filter(k => t[k] === 'land' && neighborKeys(k).every(nk => set.has(nk) && t[nk] === 'land'));
       if (inner.length) t[pick(inner)] = 'sea';
     }
-    const { sizes } = components(keys, t);
-    if (sizes.length !== count || Math.min(...sizes) < 5) return null;
-    const water = keys.filter(k => t[k] === 'sea').length / keys.length;
-    if (water < 0.1 || water > (count === 3 ? 0.32 : 0.26)) return null;
+    // zu wenig Meer: Küstenfelder (bevorzugt am Rand) abtragen, ohne Inseln zu zerreißen
+    for (let g = 0; g < 400 && seaCount() < target; g++) {
+      const coast = keys.filter(k => t[k] === 'land' && neighborKeys(k).some(nk => !set.has(nk) || t[nk] === 'sea'));
+      if (!coast.length) break;
+      const k = pick(coast);
+      t[k] = 'sea';
+      if (!ok()) t[k] = 'land';
+    }
+    if (seaCount() !== target || !ok()) return null;
     return t;
   }
 
@@ -186,14 +227,22 @@
   function assignNumbers(map) {
     const keys = Object.keys(map.hexes).filter(k => isProducing(map.hexes[k].t));
     const pool = [];
-    while (pool.length < keys.length) pool.push(...shuffle(NUMBER_SET.slice()));
+    const cfg = SHAPES[map.size];
+    for (const n in cfg.numbers) for (let i = 0; i < cfg.numbers[n]; i++) pool.push(+n);
+    shuffle(pool);
+    while (pool.length < keys.length) pool.push(...shuffle(NUMBER_SET.slice())); // nur falls die Anzahl abweicht
     pool.length = keys.length;
+    const score = assign => {
+      let bad = countRedAdjacent(assign) * 3;
+      for (const k in assign) if (map.hexes[k].t === 'gold' && WEAK_NUMBERS.includes(assign[k])) bad += 10;
+      return bad;
+    };
     let best = {}, bestBad = Infinity;
-    for (let t = 0; t < 2000 && bestBad > 0; t++) {
+    for (let t = 0; t < 4000 && bestBad > 0; t++) {
       shuffle(pool);
       const assign = {};
       keys.forEach((k, i) => { assign[k] = pool[i]; });
-      const bad = countRedAdjacent(assign);
+      const bad = score(assign);
       if (bad < bestBad) { bestBad = bad; best = assign; }
     }
     for (const k in map.hexes) map.hexes[k].n = null;
@@ -248,7 +297,8 @@
     for (const k in map.hexes) { const h = map.hexes[k]; if (!isProducing(h.t)) h.n = null; }
     const keys = Object.keys(map.hexes);
     if (!map.robber || !map.hexes[map.robber] || map.hexes[map.robber].t !== 'desert') {
-      map.robber = keys.find(k => map.hexes[k].t === 'desert') || null;
+      // Räuber startet in der Wüste; gibt es keine, auf einem beliebigen Landfeld (sonst fehlt er auf dem Brett)
+      map.robber = keys.find(k => map.hexes[k].t === 'desert') || keys.find(k => map.hexes[k].n === 12) || keys.find(k => isLand(map.hexes[k].t)) || null;
     }
     if (!map.pirate || !map.hexes[map.pirate] || isLand(map.hexes[map.pirate].t)) {
       const seas = keys.filter(k => map.hexes[k].t === 'sea');
@@ -272,16 +322,15 @@
     const order = sizes.map((s, i) => i).sort((a, b) => sizes[a] - sizes[b]);
     const free = shuffle(landKeys.slice());
     const take = pred => { const i = free.findIndex(pred); return i >= 0 ? free.splice(i, 1)[0] : free.shift(); };
-    for (let i = 0; i < cfg.gold; i++) { const isl = order[i % order.length]; hexes[take(k => comp[k] === isl)].t = 'gold'; }
-    for (let i = 0; i < cfg.deserts; i++) hexes[take(() => true)].t = 'desert';
+    for (let i = 0; i < cfg.terrains.gold; i++) { const isl = order[i % order.length]; hexes[take(k => comp[k] === isl)].t = 'gold'; }
+    for (let i = 0; i < cfg.terrains.desert; i++) hexes[take(() => true)].t = 'desert';
     const pool = [];
-    while (pool.length < free.length) pool.push(...shuffle(TERRAIN_CYCLE.slice()));
-    pool.length = free.length;
+    for (const t of ['fields', 'hills', 'mountains', 'pasture', 'forest']) for (let i = 0; i < cfg.terrains[t]; i++) pool.push(t);
     shuffle(pool);
-    free.forEach((k, i) => { hexes[k].t = pool[i]; });
+    free.forEach((k, i) => { hexes[k].t = pool[i % pool.length]; });
     const map = { size, islands, hexes, harbors: [], robber: null, pirate: null };
     assignNumbers(map);
-    placeHarbors(map);
+    for (let a = 0; a < 20; a++) { placeHarbors(map); if (map.harbors.length === cfg.harbors.any + cfg.harbors.specific) break; }
     fixTokens(map);
     return map;
   }

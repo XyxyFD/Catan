@@ -82,7 +82,7 @@
     if (st.rolling) { st.pendingState = g; return; }
     const seen = st.seen[g.id];
     if (!seen) { // beim ersten Laden keine alten Popups zeigen
-      st.seen[g.id] = { roll: g.lastRoll ? g.lastRoll.id : 0, steal: g.lastSteal ? g.lastSteal.id : 0, trade: g.lastTrade ? g.lastTrade.id : 0 };
+      st.seen[g.id] = { roll: g.lastRoll ? g.lastRoll.id : 0, steal: g.lastSteal ? g.lastSteal.id : 0, trade: g.lastTrade ? g.lastTrade.id : 0, dev: g.lastDev ? g.lastDev.id : 0 };
       applyState(g);
       return;
     }
@@ -118,12 +118,16 @@
     if (g.phase === 'discard' && (!prev || prev.phase !== 'discard')) st.discard = E.emptyRes();
     if (g.phase === 'gold' && (!prev || prev.phase !== 'gold')) st.gold = E.emptyRes();
     if (seen && g.lastRoll && g.lastRoll.id > seen.roll) seen.roll = g.lastRoll.id;
-    if (seen && g.lastSteal && g.lastSteal.id > seen.steal) { seen.steal = g.lastSteal.id; st.popups.push({ type: 'steal', data: g.lastSteal }); }
+    // Neue Popups kommen vor noch nicht bestätigte ältere; die älteren erscheinen danach.
+    const fresh = [];
+    if (seen && g.lastDev && g.lastDev.id > (seen.dev || 0)) { seen.dev = g.lastDev.id; fresh.push({ type: 'dev', data: g.lastDev }); }
+    if (seen && g.lastSteal && g.lastSteal.id > seen.steal) { seen.steal = g.lastSteal.id; fresh.push({ type: 'steal', data: g.lastSteal }); }
     if (seen && g.lastTrade && g.lastTrade.id > seen.trade) {
       seen.trade = g.lastTrade.id;
-      st.popups.push({ type: 'trade', data: g.lastTrade });
+      fresh.push({ type: 'trade', data: g.lastTrade });
       if (st.panel === 'trade') st.panel = null;
     }
+    if (fresh.length) st.popups.unshift(...fresh);
     if (prev && g.status === 'playing' && g.me >= 0 && g.current === g.me && (prev.current !== g.me || prev.status !== 'playing')) toast('Du bist am Zug!', 'turn');
     if (prev && prev.status === 'lobby' && g.status === 'playing') toast('Das Spiel beginnt!', 'turn');
     st.g = g;
@@ -307,7 +311,6 @@
     } else if (g.phase === 'robber') {
       const piece = st.drag && st.drag.rob ? st.drag.kind : null;
       hot.h = Object.keys(g.map.hexes).filter(k => {
-        if (k === g.map.robber || k === g.map.pirate) return false;
         const land = B.isLand(g.map.hexes[k].t);
         return !piece || (piece === 'robber' ? land : !land);
       });
@@ -616,7 +619,11 @@
     h += g.dice ? dieFace(g.dice[0]) + dieFace(g.dice[1], true) : '<span class="muted">–</span>';
     h += '</div>';
     if (myTurn && g.phase === 'roll') h += `<button class="btn primary" data-a="roll" ${st.rolling ? 'disabled' : ''}>🎲 Würfeln</button>`;
-    else if (myTurn && (g.phase === 'main' || (g.phase === 'setup' && g.setup.expect === 'done'))) h += '<button class="btn primary" data-a="endTurn">Zug beenden ➡️</button>';
+    else if (myTurn && (g.phase === 'main' || (g.phase === 'setup' && g.setup.expect === 'done'))) {
+      const mustBuild = g.phase === 'main' && g.freeRoads > 0 && (my.left.road > 0 && E.legalSpots(g, me, 'road').length > 0 || my.left.ship > 0 && E.legalSpots(g, me, 'ship').length > 0);
+      h += `<button class="btn primary" data-a="endTurn" ${mustBuild ? 'disabled title="Erst die Gratis-Straßen bauen"' : ''}>Zug beenden ➡️</button>`;
+      if (mustBuild) h += `<div class="muted" style="font-size:12px">Noch ${g.freeRoads}× bauen</div>`;
+    }
     if (myTurn && g.undoCount > 0) h += '<button class="btn small" data-a="undo">↩️ Rückgängig</button>';
     h += '</div>';
     if (!my) { el.innerHTML = h + '<div class="divider"></div><div class="dock-sec grow"><div class="muted">Du schaust zu.</div></div>'; return; }
@@ -626,11 +633,12 @@
     h += '</div></div>';
 
     const groups = {};
-    my.dev.forEach(d => { (groups[d.type] = groups[d.type] || { total: 0, playable: 0 }).total++; if (d.turn !== g.turn) groups[d.type].playable++; });
+    my.dev.forEach(d => { (groups[d.type] = groups[d.type] || { total: 0, playable: 0 }).total++; if (true) groups[d.type].playable++; });
     const canPlay = t => myTurn && !g.devPlayed && t !== 'vp' && groups[t].playable > 0 && (g.phase === 'main' || (t === 'knight' && g.phase === 'roll'));
     h += '<div class="divider"></div><div class="dock-sec"><div class="sec-title">Entwicklung</div><div class="devs">';
     h += Object.keys(groups).map(t => `<div class="dcard ${canPlay(t) ? 'playable' : ''}" ${canPlay(t) ? `data-a="playDev" data-v="${t}"` : ''} title="${DEV_INFO[t].de}: ${DEV_INFO[t].desc}${t !== 'vp' && !canPlay(t) ? ' (gerade nicht spielbar)' : ''}">
       <span class="cnt">${groups[t].total}</span><span class="ic">${DEV_INFO[t].icon}</span><span class="lbl">${DEV_INFO[t].de}</span></div>`).join('') || '<span class="muted">keine</span>';
+    if (my.knights > 0) h += `<div class="dcard played" title="Ausgespielte Ritter – offen für alle sichtbar, zählen für die Rittermacht"><span class="cnt">${my.knights}</span><span class="ic">⚔️</span><span class="lbl">ausgespielt</span></div>`;
     h += '</div></div>';
 
     h += '<div class="divider"></div><div class="dock-sec grow"><div class="sec-title">Dein Vorrat – auf das Brett ziehen</div><div class="supply">';
@@ -732,6 +740,11 @@
       return ['mono', modal(`<h3>💎 Monopol: Welcher Rohstoff?</h3><select data-bind="mono">${RES.map(r => `<option value="${r}" ${st.mono === r ? 'selected' : ''}>${RI[r].icon} ${RI[r].de}</option>`).join('')}</select>
         <button class="btn primary big" style="margin-top:12px" data-a="confirmMono">Ausspielen</button>`, { close: 'cancelDev' })];
     }
+    if (st.devUI === 'knight' || st.devUI === 'roadBuilding') {
+      const d = DEV_INFO[st.devUI];
+      return ['dev-' + st.devUI, modal(`<h3>${d.icon} ${d.de} ausspielen?</h3><p class="muted">${d.desc}.<br>Das lässt sich danach nicht rückgängig machen.</p>
+        <div class="row" style="margin-top:12px"><button class="btn primary big" data-a="confirmDev" data-v="${st.devUI}">Ja, ausspielen</button><button class="btn" data-a="cancelDev">Abbrechen</button></div>`, { close: 'cancelDev' })];
+    }
     return ['', ''];
   }
 
@@ -760,6 +773,18 @@
       else msg = `<b>${esc(g.players[s.thief].name)}</b> hat bei <b>${esc(g.players[s.victim].name)}</b> ${s.hadCard ? 'eine Karte gezogen.' : 'gezogen – aber keine Karte bekommen.'}`;
       const card = s.res ? `<div class="row" style="justify-content:center;margin-top:12px"><div class="rcard big-card" style="background:${RI[s.res].bg}"><span class="ic">${RI[s.res].icon}</span><span class="lbl">${RI[s.res].de}</span></div></div>` : '';
       return `<h3>${icon} ${piece}</h3><div>${msg}</div>${card}`;
+    }
+    if (p.type === 'dev') {
+      const d = p.data, who = d.by === g.me ? 'Du' : esc(g.players[d.by].name), info = DEV_INFO[d.card];
+      let what = '';
+      if (d.card === 'knight') what = `${who} ${d.by === g.me ? 'versetzt' : 'versetzt'} jetzt den Räuber oder Piraten und zieht eine Karte. <span class="muted">(Ritter gespielt: ${d.knights})</span>`;
+      else if (d.card === 'roadBuilding') what = `${who} ${d.by === g.me ? 'baust' : 'baut'} jetzt 2 Straßen oder Schiffe gratis. Der Zug endet erst, wenn beide gebaut sind.`;
+      else if (d.card === 'yearOfPlenty') what = `${who} ${d.by === g.me ? 'nimmst' : 'nimmt'} sich 2 Rohstoffe von der Bank:<div class="cost-res" style="margin-top:8px">${miniCards(d.res)}</div>`;
+      else if (d.card === 'monopoly') {
+        const mine = d.lost && d.lost[g.me] ? `<div style="margin-top:8px"><b>Du</b> gibst ${d.lost[g.me]}× ${RI[d.res].de} ab.</div>` : '';
+        what = `${who} ${d.by === g.me ? 'wählst' : 'wählt'} Monopol auf <b>${RI[d.res].de}</b> und ${d.by === g.me ? 'erhältst' : 'erhält'} <b>${d.total}</b> Karte(n) von den anderen.${mine}`;
+      }
+      return `<h3>${info.icon} ${info.de} ausgespielt</h3><div><b>${who}</b> ${d.by === g.me ? 'spielst' : 'spielt'} die Karte <b>${info.de}</b>.</div><div style="margin-top:8px">${what}</div>`;
     }
     if (p.type === 'trade') {
       const t = p.data;
@@ -906,10 +931,11 @@
       case 'endTurn': act({ type: 'endTurn' }); break;
       case 'steal': act({ type: 'steal', target: v === '' ? null : Number(v) }); break;
       case 'playDev':
-        if (v === 'yearOfPlenty' || v === 'monopoly') { st.devUI = v; renderOverlay(); } else act({ type: 'playDev', card: v });
+        st.devUI = v; renderOverlay(); // immer erst eine Rückfrage – nie versehentlich ausspielen
         break;
       case 'confirmYop': act({ type: 'playDev', card: 'yearOfPlenty', res1: st.yop[0], res2: st.yop[1] }, ok => { if (ok) { st.devUI = null; renderOverlay(); } }); break;
       case 'confirmMono': act({ type: 'playDev', card: 'monopoly', res: st.mono }, ok => { if (ok) { st.devUI = null; renderOverlay(); } }); break;
+      case 'confirmDev': act({ type: 'playDev', card: v }, ok => { if (ok) { st.devUI = null; renderOverlay(); } }); break;
       case 'cancelDev': st.devUI = null; renderOverlay(); break;
       case 'cnt': { const obj = getPath(b.dataset.path); obj[b.dataset.res] = Math.max(0, obj[b.dataset.res] + Number(b.dataset.d)); renderOverlay(); break; }
       case 'discard': act({ type: 'discard', res: st.discard }, ok => { if (ok) st.discard = E.emptyRes(); }); break;

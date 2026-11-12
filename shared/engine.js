@@ -23,11 +23,12 @@
     { id: 'orange', de: 'Orange', hex: '#f57c00' }, { id: 'white', de: 'Weiß', hex: '#f5f5f0' },
     { id: 'green', de: 'Grün', hex: '#2e9d4f' },
   ];
-  const STATE_VERSION = 4;
+  const STATE_VERSION = 6;
   const DEV_DECK = [].concat(
     Array(14).fill('knight'), Array(5).fill('vp'),
     Array(2).fill('roadBuilding'), Array(2).fill('yearOfPlenty'), Array(2).fill('monopoly'));
   const ISLAND_BONUS = 2;
+  const WEAK = [2, 3, 11, 12]; // diese Zahlen darf ein Goldfluss nie tragen
 
   class GameError extends Error {}
   const fail = m => { throw new GameError(m); };
@@ -285,7 +286,7 @@
     g.players = g.players.map((p, i) => ({
       userId: p.userId, name: p.name, colorId: p.colorId, color: COLORS.find(c => c.id === p.colorId).hex,
       res: emptyRes(), dev: [], knights: 0, routeLen: 0, homeIslands: [], bonusIslands: [],
-      left: { road: 30, ship: 30, settlement: 5, city: 4 },
+      left: { road: 15, ship: 15, settlement: 5, city: 4 },
     }));
     g.pieces = { v: {}, e: {} };
     g.devDeck = B.shuffle(DEV_DECK.slice());
@@ -339,6 +340,7 @@
       case 'swapNumbers': {
         const [A, H] = two();
         if (!B.isProducing(A.t) || !B.isProducing(H.t)) fail('Zahlen gibt es nur auf Rohstoff-Feldern (nicht Wüste/Meer).');
+        if ((A.t === 'gold' && WEAK.includes(H.n)) || (H.t === 'gold' && WEAK.includes(A.n))) fail('Goldfluss darf nie die Zahl 2, 3, 11 oder 12 haben.');
         [A.n, H.n] = [H.n, A.n];
         mark(g, 'h', a.b);
         break;
@@ -346,6 +348,7 @@
       case 'setTerrain': {
         const H = m.hexes[a.hex];
         if (!H || !B.ALL_TERRAINS.includes(a.t)) fail('Ungültiges Feld.');
+        if (a.t === 'gold' && WEAK.includes(H.n)) fail('Goldfluss darf nie die Zahl 2, 3, 11 oder 12 haben – setze zuerst eine andere Zahl.');
         H.t = a.t;
         B.fixTokens(m); mark(g, 'h', a.hex);
         break;
@@ -356,6 +359,7 @@
         const n = a.n === null ? null : Number(a.n);
         if (n !== null && !B.NUMBERS.includes(n)) fail('Ungültige Zahl.');
         if (n !== null && !B.isProducing(H.t)) fail('Zahlen gibt es nur auf Rohstoff-Feldern.');
+        if (n !== null && H.t === 'gold' && WEAK.includes(n)) fail('Goldfluss darf nie die Zahl 2, 3, 11 oder 12 haben.');
         H.n = n; mark(g, 'h', a.hex);
         break;
       }
@@ -403,6 +407,10 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
       log(g, `${a.kind === 'road' ? '🛤️' : '⛵'} ${pl.name} baut ${a.kind === 'road' ? 'eine Straße' : 'ein Schiff'}.`);
       s.expect = 'done';
       updateLongestRoad(g);
+      if (s.order[s.step + 1] === p) { // doppelter Zug (Ende Runde 1 / Anfang Runde 2): ohne „Zug beenden“ gleich weiter
+        s.step++; s.expect = 'settlement'; s.lastVertex = null;
+        log(g, `➡️ ${pl.name} setzt gleich die zweite Siedlung.`);
+      }
     } else fail('Im Aufbau werden nur Siedlungen, Straßen und Schiffe gesetzt.');
   }
 
@@ -548,8 +556,7 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
     if (a.piece && a.piece !== piece) fail(a.piece === 'pirate' ? 'Der Pirat darf nur aufs Wasser.' : 'Der Räuber darf nur auf Landfelder.');
     g.map.robber = g.robberFrom.robber;
     g.map.pirate = g.robberFrom.pirate;
-    if (k === g.robberFrom[piece]) { g.robberMoved = null; return; } // zurück aufs Ausgangsfeld
-    g.map[piece] = k;
+    g.map[piece] = k; // auch das Ausgangsfeld (z. B. die Start-Wüste) ist erlaubt und erlaubt das Ziehen
     g.robberMoved = piece;
     mark(g, 'h', k);
   }
@@ -635,11 +642,15 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
     if (type === 'knight') { if (g.phase !== 'main' && g.phase !== 'roll') fail('Jetzt kannst du keinen Ritter spielen.'); }
     else needPhase(g, 'main');
     if (g.devPlayed) fail('Du hast in diesem Zug schon eine Entwicklungskarte gespielt.');
-    const idx = pl.dev.findIndex(d => d.type === type && d.turn !== g.turn);
-    if (type === 'vp' || idx < 0) fail('Diese Karte kannst du gerade nicht spielen (neu gekaufte Karten erst nächste Runde).');
+    const idx = pl.dev.findIndex(d => d.type === type);
+    if (type === 'vp') fail('Siegpunktkarten werden nicht ausgespielt – sie zählen automatisch.');
+    if (idx < 0) fail('Diese Karte hast du nicht.');
+    g.devSeq = (g.devSeq || 0) + 1;
+    g.lastDev = { id: g.devSeq, by: p, card: type };
     switch (type) {
       case 'knight':
         pl.knights++;
+        g.lastDev.knights = pl.knights;
         log(g, `⚔️ ${pl.name} spielt einen Ritter.`);
         updateLargestArmy(g, p);
         enterRobber(g, g.phase);
@@ -654,6 +665,7 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
         const need = emptyRes();
         pickRes.forEach(x => { need[x]++; });
         addRes(pl.res, need);
+        g.lastDev.res = need;
         log(g, `🎁 ${pl.name} spielt Erfindung und nimmt ${fmtRes(need)}.`);
         break;
       }
@@ -661,13 +673,16 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
         const r = a.res;
         if (!RES.includes(r)) fail('Wähle einen Rohstoff.');
         let total = 0;
-        g.players.forEach((o, i) => { if (i !== p) { total += o.res[r]; pl.res[r] += o.res[r]; o.res[r] = 0; } });
+        const lost = g.players.map(() => 0);
+        g.players.forEach((o, i) => { if (i !== p) { total += o.res[r]; lost[i] = o.res[r]; pl.res[r] += o.res[r]; o.res[r] = 0; } });
+        g.lastDev.res = r; g.lastDev.total = total; g.lastDev.lost = lost;
         log(g, `💎 ${pl.name} spielt Monopol auf ${RES_DE[r]} und erhält ${total} Karten.`);
         break;
       }
       default: fail('Unbekannte Karte.');
     }
     pl.dev.splice(idx, 1);
+    if (type !== 'knight') g.devDeck.unshift(type); // gespielte Karte kommt unten zurück in den Stapel – Ritter bleiben offen liegen (Rittermacht)
     g.devPlayed = true;
   }
 
@@ -716,6 +731,12 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
     if (!t.declined.includes(p)) t.declined.push(p);
     const eligible = g.players.map((_, i) => i).filter(i => i !== t.from && (t.to === null || t.to === i));
     if (eligible.every(i => t.declined.includes(i))) g.trade = null;
+  }
+
+  // Pflicht: Wer Straßenbau gespielt hat, muss bauen – solange das überhaupt noch möglich ist.
+  function freeBuildPossible(g, p) {
+    const pl = g.players[p];
+    return (pl.left.road > 0 && legalSpots(g, p, 'road').length > 0) || (pl.left.ship > 0 && legalSpots(g, p, 'ship').length > 0);
   }
 
   function endTurn(g, p) {
@@ -787,7 +808,11 @@ gold: 'Erst müssen Gold-Rohstoffe gewählt werden.',
       case 'tradeCancel': if (g.trade && g.trade.from === p) g.trade = null; break;
       case 'endTurn':
         if (g.phase === 'setup') setupEndTurn(g, p);
-        else { needPhase(g, 'main'); endTurn(g, p); }
+        else {
+          needPhase(g, 'main');
+          if (g.freeRoads > 0 && freeBuildPossible(g, p)) fail(`Straßenbau: Du musst noch ${g.freeRoads} Straße(n)/Schiff(e) bauen, bevor du den Zug beendest.`);
+          endTurn(g, p);
+        }
         break;
       default: fail('Unbekannte Aktion.');
     }
