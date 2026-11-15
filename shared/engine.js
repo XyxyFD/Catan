@@ -28,7 +28,6 @@
     Array(14).fill('knight'), Array(5).fill('vp'),
     Array(2).fill('roadBuilding'), Array(2).fill('yearOfPlenty'), Array(2).fill('monopoly'));
   const ISLAND_BONUS = 2;
-  const WEAK = [2, 3, 11, 12]; // diese Zahlen darf ein Goldfluss nie tragen
 
   class GameError extends Error {}
   const fail = m => { throw new GameError(m); };
@@ -340,7 +339,6 @@
       case 'swapNumbers': {
         const [A, H] = two();
         if (!B.isProducing(A.t) || !B.isProducing(H.t)) fail('Zahlen gibt es nur auf Rohstoff-Feldern (nicht Wüste/Meer).');
-        if ((A.t === 'gold' && WEAK.includes(H.n)) || (H.t === 'gold' && WEAK.includes(A.n))) fail('Goldfluss darf nie die Zahl 2, 3, 11 oder 12 haben.');
         [A.n, H.n] = [H.n, A.n];
         mark(g, 'h', a.b);
         break;
@@ -348,7 +346,6 @@
       case 'setTerrain': {
         const H = m.hexes[a.hex];
         if (!H || !B.ALL_TERRAINS.includes(a.t)) fail('Ungültiges Feld.');
-        if (a.t === 'gold' && WEAK.includes(H.n)) fail('Goldfluss darf nie die Zahl 2, 3, 11 oder 12 haben – setze zuerst eine andere Zahl.');
         H.t = a.t;
         B.fixTokens(m); mark(g, 'h', a.hex);
         break;
@@ -359,7 +356,6 @@
         const n = a.n === null ? null : Number(a.n);
         if (n !== null && !B.NUMBERS.includes(n)) fail('Ungültige Zahl.');
         if (n !== null && !B.isProducing(H.t)) fail('Zahlen gibt es nur auf Rohstoff-Feldern.');
-        if (n !== null && H.t === 'gold' && WEAK.includes(n)) fail('Goldfluss darf nie die Zahl 2, 3, 11 oder 12 haben.');
         H.n = n; mark(g, 'h', a.hex);
         break;
       }
@@ -367,6 +363,35 @@
         B.placeHarbors(m);
         log(g, `⚓ ${pn} hat die Häfen neu verteilt.`);
         break;
+      case 'setHarbor': {
+        const G = B.buildGraph(m.size), e = G.edges[a.edge];
+        if (!e || !B.harborEdgeValid(m, a.edge)) fail('Häfen gehören an die Küste (Land neben Meer).');
+        m.harbors = (m.harbors || []).filter(h => h.edge !== a.edge);
+        if (a.htype === null || a.htype === undefined || a.htype === '') {
+          log(g, `⚓ ${pn} hat einen Hafen entfernt.`);
+          break;
+        }
+        if (a.htype !== 'any' && !B.RESOURCES.includes(a.htype)) fail('Ungültiger Hafentyp.');
+        const used = new Set();
+        m.harbors.forEach(h => { const he = G.edges[h.edge]; if (he) { used.add(he.a); used.add(he.b); } });
+        if (used.has(e.a) || used.has(e.b)) fail('Zwei Häfen dürfen keine gemeinsame Ecke haben.');
+        m.harbors.push({ edge: a.edge, type: a.htype });
+        log(g, `⚓ ${pn} hat einen ${a.htype === 'any' ? '3:1-Hafen' : '2:1-Hafen'} gesetzt.`);
+        break;
+      }
+      case 'moveHarbor': {
+        const G = B.buildGraph(m.size), e = G.edges[a.to];
+        const h = (m.harbors || []).find(x => x.edge === a.from);
+        if (!h) fail('Dort liegt kein Hafen.');
+        if (!e || !B.harborEdgeValid(m, a.to)) fail('Häfen gehören an die Küste (Land neben Meer).');
+        if (a.from === a.to) return;
+        const used = new Set();
+        m.harbors.forEach(o => { const oe = o !== h && G.edges[o.edge]; if (oe) { used.add(oe.a); used.add(oe.b); } });
+        if (used.has(e.a) || used.has(e.b)) fail('Zwei Häfen dürfen keine gemeinsame Ecke haben.');
+        h.edge = a.to;
+        log(g, `⚓ ${pn} hat einen Hafen versetzt.`);
+        break;
+      }
       case 'settings': {
         const v = Math.round(Number(a.vpTarget));
         if (!(v >= 5 && v <= 25)) fail('Siegpunkte müssen zwischen 5 und 25 liegen.');

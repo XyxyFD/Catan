@@ -28,7 +28,7 @@
   const st = {
     me: null, games: [], g: null, gameId: null,
     mode: null, routeType: 'road', moveFrom: null, drag: null, justDragged: false,
-    ed: { tool: 'swapTiles', sel: null, terrain: 'forest', number: 6, size: null, islands: null },
+    ed: { tool: 'swapTiles', harbor: 'any', sel: null, terrain: 'forest', number: 6, size: null, islands: null },
     trade: { to: 'all', give: E.emptyRes(), get: E.emptyRes() },
     bank: { give: 'wood', get: 'ore' },
     discard: E.emptyRes(), gold: E.emptyRes(),
@@ -414,6 +414,25 @@
       const e = G.edges[ek], a = vPx(e.a), b = vPx(e.b);
       overlay += `<line class="hot-e" data-e="${ek}" x1="${a.x + (b.x - a.x) * 0.2}" y1="${a.y + (b.y - a.y) * 0.2}" x2="${a.x + (b.x - a.x) * 0.8}" y2="${a.y + (b.y - a.y) * 0.8}" stroke-width="${S * 0.24}"/>`;
     }
+    if (editing && st.ed.tool === 'setHarbor') {
+      for (const ek of B.coastalEdges(m)) {
+        const e = G.edges[ek], a = vPx(e.a), b = vPx(e.b);
+        overlay += `<line class="hot-e" data-e="${ek}" x1="${a.x + (b.x - a.x) * 0.1}" y1="${a.y + (b.y - a.y) * 0.1}" x2="${a.x + (b.x - a.x) * 0.9}" y2="${a.y + (b.y - a.y) * 0.9}" stroke-width="${S * 0.24}"/>`;
+      }
+    }
+    if (editing && st.ed.tool === 'moveHarbor') {
+      const sel = st.ed.sel && G.edges[st.ed.sel] ? st.ed.sel : null;
+      const taken = new Set(m.harbors.map(h => h.edge));
+      for (const ek of (sel ? B.coastalEdges(m) : [...taken])) {
+        if (ek === sel) continue;
+        const e = G.edges[ek], a = vPx(e.a), b = vPx(e.b);
+        overlay += `<line class="hot-e" data-e="${ek}" x1="${a.x + (b.x - a.x) * 0.1}" y1="${a.y + (b.y - a.y) * 0.1}" x2="${a.x + (b.x - a.x) * 0.9}" y2="${a.y + (b.y - a.y) * 0.9}" stroke-width="${S * 0.24}"/>`;
+      }
+      if (sel) {
+        const e = G.edges[sel], a = vPx(e.a), b = vPx(e.b);
+        overlay += `<line data-e="${sel}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#fff" stroke-width="${S * 0.12}" stroke-linecap="round" style="cursor:pointer"/>`;
+      }
+    }
     for (const vk of hot.v) { const p = vPx(vk); overlay += `<circle class="hot-v" data-v="${vk}" cx="${p.x}" cy="${p.y}" r="${S * 0.18}"/>`; }
 
     svg.innerHTML = svgDefs() + frame + tiles + harbors + tokens + routes + buildings + overlay + thieves;
@@ -444,7 +463,18 @@
     const t = e.target.closest('[data-v],[data-e],[data-hex]');
     if (!t) return;
     const g = st.g;
-    if (g.status === 'lobby') { if (t.dataset.hex) editorClick(t.dataset.hex); return; }
+    if (g.status === 'lobby') {
+      if (st.ed.tool === 'setHarbor') { if (t.dataset.e) act({ type: 'setHarbor', edge: t.dataset.e, htype: st.ed.harbor }); }
+      else if (st.ed.tool === 'moveHarbor') {
+        const ek = t.dataset.e, ed = st.ed;
+        if (!ek) return;
+        if (!ed.sel) { ed.sel = ek; render(); }
+        else if (ed.sel === ek) { ed.sel = null; render(); }
+        else { const from = ed.sel; ed.sel = null; act({ type: 'moveHarbor', from, to: ek }); render(); }
+      }
+      else if (t.dataset.hex) editorClick(t.dataset.hex);
+      return;
+    }
     if (t.dataset.v) place(g.phase === 'setup' ? 'settlement' : st.mode, t.dataset.v);
     else if (t.dataset.e) {
       if (g.phase === 'setup') place(st.routeType, t.dataset.e);
@@ -678,7 +708,7 @@
     if (ed.islands === null) ed.islands = g.settings.islands;
     const missing = Object.values(g.map.hexes).filter(x => B.isProducing(x.t) && !x.n).length;
     const islands = B.computeIslands(g.map).sizes;
-    const tools = [['swapTiles', '🔀 Felder tauschen'], ['swapNumbers', '🔢 Zahlen tauschen'], ['setTerrain', '🖌️ Feld malen'], ['setNumber', '#️⃣ Zahl setzen']];
+    const tools = [['swapTiles', '🔀 Felder tauschen'], ['swapNumbers', '🔢 Zahlen tauschen'], ['setTerrain', '🖌️ Feld malen'], ['setNumber', '#️⃣ Zahl setzen'], ['setHarbor', '⚓ Hafen setzen'], ['moveHarbor', '↔️ Hafen versetzen']];
     h += `<div class="divider"></div><div class="dock-sec"><div class="sec-title">Zufallskarte</div>
       <div class="row"><select data-bind="ed.size"><option value="4" ${ed.size === 4 ? 'selected' : ''}>Groß (4 Sp.)</option><option value="3" ${ed.size === 3 ? 'selected' : ''}>Klein (3 Sp.)</option></select>
       <select data-bind="ed.islands"><option value="2" ${ed.islands === 2 ? 'selected' : ''}>2 Inseln</option><option value="3" ${ed.islands === 3 ? 'selected' : ''}>3 Inseln</option></select></div>
@@ -688,7 +718,8 @@
       <div class="palette">${tools.map(([k, l]) => `<button class="btn small ${ed.tool === k ? 'active' : ''}" data-a="tool" data-v="${k}">${l}</button>`).join('')}</div>
       ${ed.tool === 'setTerrain' ? `<div class="palette">${B.ALL_TERRAINS.map(t => `<button class="btn small ${ed.terrain === t ? 'active' : ''}" data-a="terrain" data-v="${t}">${TI_ICON[t]} ${TI[t]}</button>`).join('')}</div>` : ''}
       ${ed.tool === 'setNumber' ? `<div class="palette">${B.NUMBERS.map(n => `<button class="btn small ${ed.number === n ? 'active' : ''}" data-a="number" data-v="${n}" style="${n === 6 || n === 8 ? 'color:#ff7a7a' : ''}">${n}</button>`).join('')}<button class="btn small ${ed.number === null ? 'active' : ''}" data-a="number" data-v="">✖</button></div>` : ''}
-      <div class="muted">${{ swapTiles: 'Zwei Felder anklicken → tauschen (mit Zahl).', swapNumbers: 'Zwei Rohstoff-Felder anklicken → nur Zahlen tauschen.', setTerrain: 'Feldtyp wählen, dann Felder anklicken.', setNumber: 'Zahl wählen, dann Rohstoff-Feld anklicken.' }[ed.tool]}
+      ${ed.tool === 'setHarbor' ? `<div class="palette">${['any', ...B.RESOURCES].map(t => `<button class="btn small ${ed.harbor === t ? 'active' : ''}" data-a="harbor" data-v="${t}">${t === 'any' ? '3:1' : RI[t].icon + ' 2:1'}</button>`).join('')}<button class="btn small ${ed.harbor === null ? 'active' : ''}" data-a="harbor" data-v="">✖ entfernen</button></div>` : ''}
+      <div class="muted">${{ moveHarbor: 'Erst einen vorhandenen Hafen anklicken, dann die neue Küstenkante (Typ bleibt erhalten).', setHarbor: 'Hafentyp wählen, dann eine Küstenkante anklicken (gelb markiert). Vorhandenen Hafen überschreibt/entfernt man genauso.', swapTiles: 'Zwei Felder anklicken → tauschen (mit Zahl).', swapNumbers: 'Zwei Rohstoff-Felder anklicken → nur Zahlen tauschen.', setTerrain: 'Feldtyp wählen, dann Felder anklicken.', setNumber: 'Zahl wählen, dann Rohstoff-Feld anklicken.' }[ed.tool]}
       ${missing ? `<span style="color:var(--err)"> · ${missing} Feld(er) ohne Zahl</span>` : ''}</div></div>
       <div class="divider"></div><div class="dock-sec"><div class="sec-title">Start</div>
       <div class="row">Ziel <button class="btn small" data-a="vp" data-d="-1">−</button><b>${g.settings.vpTarget} ⭐</b><button class="btn small" data-a="vp" data-d="1">+</button></div>
@@ -918,6 +949,7 @@
       case 'regen': st.ed.sel = null; act({ type: 'regenerate', size: st.ed.size, islands: st.ed.islands }); break;
       case 'harbors': act({ type: 'harbors' }); break;
       case 'tool': st.ed.tool = v; st.ed.sel = null; render(); break;
+      case 'harbor': st.ed.harbor = v === '' ? null : v; renderDock(); break;
       case 'terrain': st.ed.terrain = v; renderDock(); break;
       case 'number': st.ed.number = v === '' ? null : Number(v); renderDock(); break;
       case 'vp': act({ type: 'settings', vpTarget: g.settings.vpTarget + Number(b.dataset.d) }); break;

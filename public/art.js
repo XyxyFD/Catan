@@ -83,7 +83,7 @@ window.ArchipelArt = (() => {
     const base = (id, a, b) => `<radialGradient id="tg-${id}" cx="40%" cy="30%" r="80%"><stop offset="0%" stop-color="${a}"/><stop offset="100%" stop-color="${b}"/></radialGradient>`;
     let defs = `<clipPath id="hexclip"><polygon points="${hexPts(R)}"/></clipPath>`;
     defs += base('forest', '#5fae55', '#2c6a2f') + base('pasture', '#b6e27a', '#6daa3c') + base('fields', '#f6dc77', '#d39e2a')
-      + base('hills', '#e59a68', '#a24b26') + base('mountains', '#a9b5c1', '#5f6d7a') + base('gold', '#86c56b', '#4c8a3f')
+      + base('hills', '#e59a68', '#a24b26') + base('mountains', '#a9b5c1', '#5f6d7a') + base('gold', '#9a6fe0', '#4a2a92')
       + base('desert', '#f4e2ad', '#d2b06a') + base('sea', '#3f97d6', '#1b5f9c');
     const sym = (id, inner) => `<symbol id="t-${id}" viewBox="-100 -100 200 200" overflow="visible"><g clip-path="url(#hexclip)">
       <rect x="-110" y="-110" width="220" height="220" fill="url(#tg-${id})"/>${inner}</g></symbol>`;
@@ -112,9 +112,9 @@ window.ArchipelArt = (() => {
     let m = '';
     [[-50, -26, 1.1], [8, -44, 1.3], [60, -20, 1.05], [-70, 50, 1], [62, 62, 1.1], [-14, 88, 1], [-90, 0, .8], [92, 18, .8]].forEach(([x, y, s]) => { m += peak(x, y, s); });
     // Goldfluss
-    let g = '<path d="M-110,-40 C-50,-70 -30,10 10,0 S60,60 110,40" fill="none" stroke="#2f7fc0" stroke-width="30"/>'
-      + '<path d="M-110,-40 C-50,-70 -30,10 10,0 S60,60 110,40" fill="none" stroke="#5fb3ee" stroke-width="14" opacity=".8"/>'
-      + '<path d="M-110,-40 C-50,-70 -30,10 10,0 S60,60 110,40" fill="none" stroke="#ffffff" stroke-width="2" stroke-dasharray="6 12" opacity=".7"/>';
+    let g = '<path d="M-110,-40 C-50,-70 -30,10 10,0 S60,60 110,40" fill="none" stroke="#8a5a00" stroke-width="30"/>'
+      + '<path d="M-110,-40 C-50,-70 -30,10 10,0 S60,60 110,40" fill="none" stroke="#ffd23f" stroke-width="18"/>'
+      + '<path d="M-110,-40 C-50,-70 -30,10 10,0 S60,60 110,40" fill="none" stroke="#fff6c2" stroke-width="3" stroke-dasharray="6 12" opacity=".9"/>';
     [[-60, -22], [-44, -66], [40, 20], [58, 70], [-10, 30], [20, -30], [70, 10], [-70, 30]].forEach(([x, y], i) => { g += nugget(x, y, 1.1 + (i % 2) * .3); });
     for (let i = 0; i < 10; i++) { const x = (r() - .5) * 150, y = (r() - .5) * 150; g += `<path d="M${x},${y - 5} L${x + 1.5},${y - 1.5} L${x + 5},${y} L${x + 1.5},${y + 1.5} L${x},${y + 5} L${x - 1.5},${y + 1.5} L${x - 5},${y} L${x - 1.5},${y - 1.5} Z" fill="#fff8d0"/>`; }
     // Wüste

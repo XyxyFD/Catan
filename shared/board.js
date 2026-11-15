@@ -20,25 +20,25 @@
     'forest', 'pasture', 'fields', 'hills', 'mountains',
     'forest', 'pasture', 'fields'];
 
-  // Spielfeld-Formen laut Anleitung "Seefahrer" (3-4 Spieler): 7 Zeilen, jede Zeile gleich breit, versetzt.
-  //   3 Spieler: 7 x 5 = 35 Felder, 4 Spieler: 7 x 6 = 42 Felder (Szenario "Zu neuen Ufern").
-  // Zusammensetzung = Hauptinsel + kleine Inseln aus der Materialtabelle des Szenarios.
+  // Spielfeld-Formen: 8 Zeilen, abwechselnd breit (cols) und schmal (cols-1), versetzt.
+  //   3 Spieler: 4x5 + 4x4 = 36 Felder (24 Land / 12 Meer), 4 Spieler: 4x6 + 4x5 = 44 Felder (30 Land / 14 Meer).
+  // Zahlen sind symmetrisch (2/12, 3/11, 4/10, 5/9, 6/8 gleich oft), Rohstoffe gleich verteilt.
   const SHAPES = {
     3: {
-      cols: 5, rowCount: 7,
-      sea: 13, terrains: { desert: 1, gold: 2, fields: 4, hills: 4, mountains: 4, pasture: 4, forest: 3 },
-      numbers: { 2: 1, 3: 2, 4: 2, 5: 3, 6: 2, 8: 3, 9: 2, 10: 3, 11: 2, 12: 1 },
+      cols: 5, rowCount: 8,
+      sea: 12, terrains: { desert: 2, gold: 2, fields: 4, hills: 4, mountains: 4, pasture: 4, forest: 4 },
+      numbers: { 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 8: 3, 9: 3, 10: 2, 11: 2, 12: 1 },
       harbors: { any: 3, specific: 5 },
     },
     4: {
-      cols: 6, rowCount: 7,
-      sea: 14, terrains: { desert: 1, gold: 2, fields: 5, hills: 5, mountains: 5, pasture: 5, forest: 5 },
-      numbers: { 2: 2, 3: 3, 4: 3, 5: 3, 6: 3, 8: 3, 9: 3, 10: 3, 11: 3, 12: 1 },
+      cols: 6, rowCount: 8,
+      sea: 14, terrains: { desert: 2, gold: 3, fields: 5, hills: 5, mountains: 5, pasture: 5, forest: 5 },
+      numbers: { 2: 2, 3: 3, 4: 3, 5: 3, 6: 3, 8: 3, 9: 3, 10: 3, 11: 3, 12: 2 },
       harbors: { any: 4, specific: 5 },
     },
   };
-  // Gold soll nie auf den schwächsten Zahlen liegen.
-  const WEAK_NUMBERS = [2, 3, 11, 12];
+  // Beim Generieren darf Gold nur diese (seltenen) Zahlen tragen – nie 5, 6, 8, 9. Manuelles Tauschen ist unbeschränkt.
+  const GOLD_NUMBERS = [2, 3, 4, 10, 11, 12];
 
   const hk = (q, r) => q + ',' + r;
   const parseHex = k => { const p = k.split(','); return { q: +p[0], r: +p[1] }; };
@@ -64,10 +64,10 @@
   }
 
   function shapeCoords(size) {
-    const cfg = SHAPES[size], h = (cfg.rowCount - 1) / 2, out = [];
+    const cfg = SHAPES[size], h = Math.floor(cfg.rowCount / 2), out = [];
     for (let i = 0; i < cfg.rowCount; i++) {
-      const r = i - h;
-      for (let c = 0; c < cfg.cols; c++) out.push({ q: c - Math.floor(r / 2), r });
+      const r = i - h, n = i % 2 === 0 ? cfg.cols : cfg.cols - 1;
+      for (let c = 0; c < n; c++) out.push({ q: c - Math.floor(r / 2), r });
     }
     return out;
   }
@@ -226,23 +226,26 @@
 
   function assignNumbers(map) {
     const keys = Object.keys(map.hexes).filter(k => isProducing(map.hexes[k].t));
+    const goldKeys = keys.filter(k => map.hexes[k].t === 'gold'), otherKeys = keys.filter(k => map.hexes[k].t !== 'gold');
     const pool = [];
     const cfg = SHAPES[map.size];
     for (const n in cfg.numbers) for (let i = 0; i < cfg.numbers[n]; i++) pool.push(+n);
-    shuffle(pool);
-    while (pool.length < keys.length) pool.push(...shuffle(NUMBER_SET.slice())); // nur falls die Anzahl abweicht
+    while (pool.length < keys.length) pool.push(...NUMBER_SET); // nur falls die Anzahl abweicht
     pool.length = keys.length;
-    const score = assign => {
-      let bad = countRedAdjacent(assign) * 3;
-      for (const k in assign) if (map.hexes[k].t === 'gold' && WEAK_NUMBERS.includes(assign[k])) bad += 10;
-      return bad;
-    };
-    let best = {}, bestBad = Infinity;
+    let best = null, bestBad = Infinity;
     for (let t = 0; t < 4000 && bestBad > 0; t++) {
-      shuffle(pool);
-      const assign = {};
-      keys.forEach((k, i) => { assign[k] = pool[i]; });
-      const bad = score(assign);
+      const rest = shuffle(pool.slice()), assign = {};
+      // Gold zuerst: nur erlaubte Zahlen aus dem Vorrat ziehen
+      let ok = true;
+      for (const k of goldKeys) {
+        const i = rest.findIndex(n => GOLD_NUMBERS.includes(n) && Math.random() < 0.5);
+        const j = i >= 0 ? i : rest.findIndex(n => GOLD_NUMBERS.includes(n));
+        if (j < 0) { ok = false; break; }
+        assign[k] = rest.splice(j, 1)[0];
+      }
+      if (!ok) continue;
+      otherKeys.forEach((k, i) => { assign[k] = rest[i]; });
+      const bad = countRedAdjacent(assign);
       if (bad < bestBad) { bestBad = bad; best = assign; }
     }
     for (const k in map.hexes) map.hexes[k].n = null;
@@ -323,7 +326,7 @@
     const free = shuffle(landKeys.slice());
     const take = pred => { const i = free.findIndex(pred); return i >= 0 ? free.splice(i, 1)[0] : free.shift(); };
     for (let i = 0; i < cfg.terrains.gold; i++) { const isl = order[i % order.length]; hexes[take(k => comp[k] === isl)].t = 'gold'; }
-    for (let i = 0; i < cfg.terrains.desert; i++) hexes[take(() => true)].t = 'desert';
+    for (let i = 0; i < cfg.terrains.desert; i++) { const isl = order[order.length - 1 - (i % order.length)]; hexes[take(k => comp[k] === isl)].t = 'desert'; }
     const pool = [];
     for (const t of ['fields', 'hills', 'mountains', 'pasture', 'forest']) for (let i = 0; i < cfg.terrains[t]; i++) pool.push(t);
     shuffle(pool);
