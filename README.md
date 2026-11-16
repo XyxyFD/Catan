@@ -20,10 +20,10 @@ In `docker-compose.yml` unter `APP_USERS` (Format `Name:Passwort,Name:Passwort`)
 
 | Name    | Passwort |
 |---------|----------|
-| Felix       | test     |
-| Günther     | test     |
-| Kühlschrank | test     |
-| Jonas       | test     |
+| Felix       | catan    |
+| Günther     | catan    |
+| Kühlschrank | catan    |
+| Jonas       | catan    |
 
 Nur **Felix** (`MAP_EDITOR` in `docker-compose.yml`) kann Spiele erstellen, die Karte generieren/bearbeiten und das Spiel starten.
 Die anderen treten bei, wählen ihre Farbe (Rot, Blau, Orange, Weiß, Grün) und sehen die Kartenbearbeitung live.

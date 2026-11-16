@@ -35,7 +35,7 @@ async function initDb() {
     id SERIAL PRIMARY KEY, state JSONB NOT NULL, updated TIMESTAMPTZ NOT NULL DEFAULT now())`);
 
   // Accounts aus APP_USERS ("Name:Passwort,Name:Passwort") anlegen bzw. Passwort aktualisieren
-  const spec = process.env.APP_USERS || 'Felix:test,Günther:test,Kühlschrank:test,Jonas:test';
+  const spec = process.env.APP_USERS || 'Felix:catan,Günther:catan,Kühlschrank:catan,Jonas:catan';
   const names = [];
   for (const entry of spec.split(',').map(s => s.trim()).filter(Boolean)) {
     const i = entry.indexOf(':');
